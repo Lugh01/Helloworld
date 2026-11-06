@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Solar Irrigation Controller</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <svg width="38" height="38" viewBox="0 0 38 38" aria-hidden="true">
+        <circle cx="13" cy="13" r="6" fill="var(--sun)"/>
+        <g stroke="var(--sun)" stroke-width="2" stroke-linecap="round"><path d="M13 2v3M13 21v3M2 13h3M21 13h3M5.2 5.2l2.1 2.1M18.7 18.7l2.1 2.1M5.2 20.8l2.1-2.1M18.7 7.3l2.1-2.1"/></g>
+        <path d="M27 14c3.5 4.6 6 8.2 6 11.5a6 6 0 0 1-12 0c0-3.3 2.5-6.9 6-11.5z" fill="var(--water)"/>
+        <path d="M4 34h30" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+      <div><h1>Solar Irrigation Controller</h1><small>Central Dry Zone · tomato, chili &amp; onion plots</small></div>
+    </div>
+    <span class="clock num" id="clock">--:--</span>
+    <span class="conn" id="conn"><i></i><span>Connecting…</span></span>
+  </div>
+  <div class="tabbar"><div class="wrap"><nav class="tabs" role="tablist" aria-label="Sections">
+    <button class="tab" role="tab" data-view="overview" aria-selected="true">Overview</button>
+    <button class="tab" role="tab" data-view="control" aria-selected="false">Tracker &amp; sensors</button>
+    <button class="tab" role="tab" data-view="setup" aria-selected="false">Setup</button>
+    <button class="tab" role="tab" data-view="guide" aria-selected="false">User guide</button>
+  </nav></div></div>
+</header>
+
+<main class="wrap">
+  <div id="banners" style="display:grid;gap:10px;margin-bottom:16px"></div>
+
+  <!-- ============ OVERVIEW ============ -->
+  <section class="view" id="view-overview">
+    <div class="hero">
+      <div class="card">
+        <div class="card-head"><h2>Soil moisture</h2><span class="label" id="cropLabel">Tomato profile</span></div>
+        <div class="soil">
+          <div class="gauge">
+            <svg id="gauge" viewBox="0 0 220 200" role="img" aria-label="Soil moisture gauge"></svg>
+            <div class="read"><div class="big num" id="soilBig">--<small>%</small></div><div class="state" id="soilState">—</div></div>
+          </div>
+          <div style="display:grid;gap:14px;min-width:0">
+            <div class="sensors" id="sensorBars"></div>
+            <div class="legend-key">
+              <span><i style="background:var(--bad-soft);border:1px solid var(--bad)"></i>Critical</span>
+              <span><i style="background:var(--accent-soft);border:1px solid var(--accent)"></i>Target band</span>
+              <span><i style="background:var(--water)"></i>Now</span>
+            </div>
+            <p class="muted" style="margin:0;font-size:.84rem" id="soilExplain">—</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card pump">
+        <div class="card-head" style="margin-bottom:0"><h2>Water pump</h2>
+          <div class="seg" role="group" aria-label="Control mode">
+            <button id="modeAuto" aria-pressed="true">Auto</button>
+            <button id="modeManual" aria-pressed="false">Manual</button>
+          </div>
+        </div>
+        <div class="pump-top">
+          <button class="pump-btn" id="pumpBtn" aria-live="polite">
+            <span><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3c3.5 4.6 6 8 6 11.2A6 6 0 0 1 6 14.2C6 11 8.5 7.6 12 3z"/></svg><span id="pumpBtnText">Run pump</span></span>
+          </button>
+          <div class="pump-info">
+            <span class="chip idle" id="pumpChip"><i></i><span>Standby</span></span>
+            <div class="speed num" id="pumpSpeed">0<small>% speed</small></div>
+            <div class="bar" style="height:6px"><span id="pumpBar" style="width:0%"></span></div>
+            <div class="reason" id="pumpReason">—</div>
+            <div class="muted num" style="font-size:.82rem" id="pumpTimer"></div>
+          </div>
+        </div>
+        <div class="manual-box">
+          <div class="row" style="justify-content:space-between"><span class="label">Manual run settings</span><span class="num" style="font-weight:700" id="mSpeedOut">80%</span></div>
+          <input type="range" id="mSpeed" min="30" max="100" step="5" value="80" aria-label="Manual pump speed">
+          <div class="row" style="justify-content:space-between">
+            <div class="chips" id="mMinutes" role="group" aria-label="Run time">
+              <button data-min="2" aria-pressed="false">2 min</button><button data-min="5" aria-pressed="true">5 min</button><button data-min="10" aria-pressed="false">10 min</button><button data-min="15" aria-pressed="false">15 min</button>
+            </div>
+            <span class="muted num" style="font-size:.8rem" id="mEstimate">≈ 32 L</span>
+          </div>
+          <p class="muted" style="margin:0;font-size:.78rem">Runs stop automatically after the selected time. In Auto mode a manual stop pauses automatic watering for 30 minutes.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="tiles" id="tiles"></div>
+
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><h2>Last 24 hours</h2>
+          <div class="seg" role="group" aria-label="Chart">
+            <button data-chart="soil" aria-pressed="true">Soil &amp; pump</button>
+            <button data-chart="air" aria-pressed="false">Air</button>
+            <button data-chart="power" aria-pressed="false">Power</button>
+          </div>
+        </div>
+        <div class="legend-key" id="chartLegend" style="margin-bottom:6px"></div>
+        <div class="chart-wrap"><svg id="chart" preserveAspectRatio="none"></svg></div>
+        <div class="chart-read" id="chartRead">Touch or hover the chart to read values.</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Activity log</h2><span class="label">Newest first</span></div>
+        <ul class="events" id="events"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TRACKER & SENSORS ============ -->
+  <section class="view" id="view-control" hidden>
+    <div class="card">
+      <div class="card-head"><h2>Solar tracker</h2><span class="label" id="trkMode">Automatic (time based)</span></div>
+      <div class="tracker">
+        <svg id="trackerSvg" viewBox="0 0 280 170" role="img" aria-label="Panel angle"></svg>
+        <div style="display:grid;gap:12px;min-width:0">
+          <p style="margin:0">The panel turns east to west through the day following the sun's expected position: <b>15°</b> at sunrise (06:00), <b>90°</b> at noon, <b>165°</b> at sunset (18:00). It moves every 15 minutes and parks facing east overnight, ready for the morning sun.</p>
+          <div class="seg" role="group" aria-label="Tracker mode"><button id="trkAuto" aria-pressed="true">Automatic</button><button id="trkManual" aria-pressed="false">Manual angle</button></div>
+          <div id="trkManualBox" class="manual-box" hidden>
+            <div class="row" style="justify-content:space-between"><span class="label">Panel angle</span><b class="num" id="trkAngleOut">90°</b></div>
+            <input type="range" id="trkAngle" min="0" max="180" step="5" value="90" aria-label="Panel angle">
+            <div class="row"><button class="btn water sm" id="trkMove">Move panel</button><span class="muted" style="font-size:.8rem">Use for testing or cleaning. Switch back to Automatic afterwards.</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Soil sensor calibration</h2><span class="label">Do this once per sensor</span></div>
+      <ol class="steps" style="margin-bottom:14px">
+        <li><span>Hold the sensor in <b>dry air</b> (or completely dry soil from the field) and press <b>Save as dry</b>.</span></li>
+        <li><span>Put the sensor in a glass of <b>water</b> up to the line, or in fully soaked soil, and press <b>Save as wet</b>.</span></li>
+        <li><span>Install the sensor at root depth (10–15 cm for tomato and chili, 5–10 cm for onion). Repeat each season or if readings look wrong.</span></li>
+      </ol>
+      <div class="tscroll"><table>
+        <thead><tr><th>Sensor</th><th>Raw now</th><th>Moisture</th><th>Dry point</th><th>Wet point</th><th>Status</th><th>Calibrate</th></tr></thead>
+        <tbody id="calBody"></tbody>
+      </table></div>
+    </div>
+
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><h2>System</h2></div>
+        <dl class="kv" id="sysInfo"></dl>
+        <div class="row" style="margin-top:14px">
+          <button class="btn" id="syncClock">Set clock from this phone</button>
+          <button class="btn danger" id="clearAlarm">Reset alarm</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Join a Wi-Fi router</h2><span class="label">Optional</span></div>
+        <p class="muted" style="margin:0 0 12px;font-size:.86rem">The controller always keeps its own hotspot. Joining a router with internet also sets the clock automatically.</p>
+        <form id="wifiForm" style="display:grid;gap:10px">
+          <div class="field"><label for="wSsid">Network name</label><input type="text" id="wSsid" autocomplete="off"></div>
+          <div class="field"><label for="wPass">Password</label><input type="password" id="wPass" autocomplete="off"></div>
+          <div><button class="btn primary" type="submit">Save and restart</button></div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SETUP ============ -->
+  <section class="view" id="view-setup" hidden>
+    <form id="setForm" class="card" style="display:grid;gap:22px">
+      <div class="card-head" style="margin:0"><h2>Watering settings</h2>
+        <div class="row"><button class="btn" type="button" id="setReload">Reload</button><button class="btn primary" type="submit">Save settings</button></div>
+      </div>
+
+      <fieldset>
+        <div class="sec-title"><h3>Crop profile</h3><span class="muted" style="font-size:.82rem">Sets moisture levels for the crop. You can fine-tune them below.</span></div>
+        <div class="form-grid">
+          <div class="field"><label for="s_crop">Crop</label>
+            <select id="s_crop"><option value="0">Tomato</option><option value="1">Chili</option><option value="2">Onion</option><option value="3">Custom</option></select>
+            <span class="hint" id="cropHint"></span></div>
+          <div class="field"><label>Moisture bands</label><div class="band-preview" id="bandPreview"></div><span class="hint">Red: critical. Amber: start watering. Green: target band.</span></div>
+        </div>
+        <div class="form-grid">
+          <div class="field"><label for="s_startPct">Start watering below (%)</label><input type="number" id="s_startPct" min="5" max="90"><span class="hint">Pump starts when the average soil moisture falls below this.</span></div>
+          <div class="field"><label for="s_targetPct">Stop watering at (%)</label><input type="number" id="s_targetPct" min="10" max="95"><span class="hint">Pump stops here. Keep at least 10 above the start level.</span></div>
+          <div class="field"><label for="s_criticalPct">Critical level (%)</label><input type="number" id="s_criticalPct" min="0" max="80"><span class="hint">Below this the pump runs at full speed, even outside watering hours.</span></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <div class="sec-title"><h3>Pump behaviour</h3></div>
+        <div class="form-grid">
+          <div class="field"><label for="s_minSpeed">Lowest pump speed (%)</label><input type="number" id="s_minSpeed" min="20" max="100"><span class="hint">Speed when the soil is only a little dry. Below ~40 % many DC pumps stall.</span></div>
+          <div class="field"><label for="s_pulseRunMin">Run for at most (minutes)</label><input type="number" id="s_pulseRunMin" min="1" max="60" step="0.5"><span class="hint">Then pause so water soaks in instead of running off.</span></div>
+          <div class="field"><label for="s_soakMin">Soak pause (minutes)</label><input type="number" id="s_soakMin" min="0" max="60" step="0.5"><span class="hint">Sandy soil: 5. Loam: 10. Clay: 15–20.</span></div>
+          <div class="field"><label for="s_pumpLpm">Pump flow at full speed (L/min)</label><input type="number" id="s_pumpLpm" min="0.1" max="200" step="0.1"><span class="hint">Measure with a bucket and a timer. Used for water totals.</span></div>
+          <div class="field"><label for="s_dailyLimitL">Daily water limit (L)</label><input type="number" id="s_dailyLimitL" min="1" step="1"><span class="hint">Auto watering stops for the day after this amount.</span></div>
+          <div class="field"><label for="s_manualMaxMin">Longest manual run (minutes)</label><input type="number" id="s_manualMaxMin" min="1" max="120"></div>
+        </div>
+        <label class="check"><input type="checkbox" id="s_hotBoost"><span><b>Hot-day boost.</b> Raise the target by 5 % when the air is above 35 °C.</span></label>
+      </fieldset>
+
+      <fieldset>
+        <div class="sec-title"><h3>Watering hours</h3></div>
+        <label class="check"><input type="checkbox" id="s_useWindows"><span><b>Water only in cool hours</b> (morning and evening). Less water is lost to evaporation. Critically dry soil is still watered at any time.</span></label>
+        <div class="form-grid">
+          <div class="field"><label for="s_w1Start">Morning window</label><div class="inline"><input type="number" id="s_w1Start" min="0" max="23" aria-label="Morning start hour"><span>to</span><input type="number" id="s_w1End" min="0" max="24" aria-label="Morning end hour"><span class="muted">h</span></div></div>
+          <div class="field"><label for="s_w2Start">Evening window</label><div class="inline"><input type="number" id="s_w2Start" min="0" max="23" aria-label="Evening start hour"><span>to</span><input type="number" id="s_w2End" min="0" max="24" aria-label="Evening end hour"><span class="muted">h</span></div></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <div class="sec-title"><h3>Protection</h3></div>
+        <div class="form-grid">
+          <div class="field"><label for="s_batCutoffV">Stop pump below battery (V)</label><input type="number" id="s_batCutoffV" min="9" max="14" step="0.1"><span class="hint">12 V lead-acid: 11.6 V. 12 V LiFePO₄: 12.0 V.</span></div>
+          <div class="field"><label for="s_batResumeV">Allow pump again above (V)</label><input type="number" id="s_batResumeV" min="9" max="15" step="0.1"></div>
+          <div class="field"><label for="s_noRiseMin">Dry-run alarm after (pump minutes)</label><input type="number" id="s_noRiseMin" min="2" max="60"><span class="hint">Alarm if the soil does not get wetter. Usually an empty tank or a broken pipe.</span></div>
+          <div class="field"><label for="s_sensorCount">Soil sensors installed</label><select id="s_sensorCount"><option>1</option><option>2</option><option>3</option></select></div>
+        </div>
+      </fieldset>
+    </form>
+  </section>
+
+  <!-- ============ GUIDE ============ -->
+  <section class="view guide" id="view-guide" hidden>
+    <div class="card prose">
+      <h2 style="margin-bottom:10px">Getting started</h2>
+      <ol class="steps">
+        <li><span>Switch on the controller. Within 10 seconds it creates a Wi-Fi hotspot called <b>SolarIrrigation</b>.</span></li>
+        <li><span>On your phone, join that Wi-Fi (password <b>irrigate123</b> unless it was changed). Ignore the "no internet" message.</span></li>
+        <li><span>Open a browser and go to <b>http://192.168.4.1</b> or <b>http://irrigation.local</b>. Add it to your home screen for one-tap access.</span></li>
+        <li><span>The pill at the top right shows <b>Live</b> when data comes from the controller. <b>Demo</b> means you are viewing simulated data.</span></li>
+        <li><span>The first time, check <b>Setup → Crop</b>, calibrate each soil sensor (<b>Tracker &amp; sensors</b> tab) and press <b>Set clock from this phone</b> if the clock shows "not set".</span></li>
+      </ol>
+    </div>
+
+    <div class="card prose">
+      <h2 style="margin-bottom:10px">How automatic watering works</h2>
+      <p>The controller runs this cycle every second. It waters only as much as the crop needs, when it needs it.</p>
+      <ol class="steps">
+        <li><span><b>Measure.</b> Read every soil sensor, ignore any that are disconnected, and average the rest. One faulty sensor can't flood or dry out the field.</span></li>
+        <li><span><b>Decide.</b> If the average is below the <b>start level</b> and it is a watering hour, start a cycle. Between start and target nothing changes. This gap stops the pump from switching on and off all the time.</span></li>
+        <li><span><b>Choose the speed.</b> The drier the soil, the faster the pump. At or below the critical level it runs at 100 %. Close to the target it slows to the lowest speed. This saves battery and avoids high pressure and runoff.</span></li>
+        <li><span><b>Pulse and soak.</b> After the run time (default 5 min) the pump pauses (default 10 min) so water sinks to the roots before the sensor is read again. This gives deeper roots and less waste.</span></li>
+        <li><span><b>Stop at target.</b> When the soil reaches the target level the pump stops and the cycle ends.</span></li>
+        <li><span><b>Protect.</b> The pump is blocked if the battery is low, if the daily water limit is reached, or if the soil does not get wetter while pumping (empty tank or broken pipe). Each event is written to the activity log.</span></li>
+      </ol>
+    </div>
+
+    <div class="card prose">
+      <h2 style="margin-bottom:10px">Auto or manual?</h2>
+      <ul>
+        <li><b>Auto (recommended for every day).</b> The controller waters by itself. You can still press <b>Run pump</b> for an extra timed watering. If you press <b>Stop</b>, auto watering pauses for 30 minutes, or until you press <b>Resume auto</b>.</li>
+        <li><b>Manual.</b> The pump runs only when you press <b>Run pump</b>, and stops after the time you choose. Use it when testing, flushing pipes, applying fertiliser through the water, or if a sensor is broken.</li>
+        <li>Low-battery protection and the run-time limit stay on in both modes.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:10px">Crop settings</h2>
+      <p class="muted" style="margin:0 0 10px;font-size:.86rem">Starting values, as a percentage of the calibrated sensor range. Check by hand: squeeze soil from root depth. It should hold together without dripping.</p>
+      <div class="tscroll"><table>
+        <thead><tr><th>Crop</th><th>Start below</th><th>Stop at</th><th>Critical</th><th>Sensor depth</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><b>Tomato</b></td><td class="num">45 %</td><td class="num">70 %</td><td class="num">30 %</td><td>10–15 cm</td><td>Keep moisture even. Big swings cause fruit cracking and blossom-end rot. Needs the most water while flowering and fruiting.</td></tr>
+          <tr><td><b>Chili</b></td><td class="num">40 %</td><td class="num">65 %</td><td class="num">28 %</td><td>10–15 cm</td><td>Tolerates slightly drier soil, but not waterlogging. Water stress while flowering makes flowers drop.</td></tr>
+          <tr><td><b>Onion</b></td><td class="num">50 %</td><td class="num">75 %</td><td class="num">35 %</td><td>5–10 cm</td><td>Shallow roots need frequent light watering. Lower the target 2–3 weeks before harvest so bulbs cure well.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:10px">Alerts and what to do</h2>
+      <div class="tscroll"><table>
+        <thead><tr><th>You see</th><th>Meaning</th><th>What to do</th></tr></thead>
+        <tbody>
+          <tr><td><span class="chip bad"><i></i>Battery lockout</span></td><td>Battery below the cut-off voltage. The pump is blocked to protect the battery.</td><td>Wait for sun; the pump is allowed again above the resume voltage. Clean the panel. After several cloudy days, water by hand.</td></tr>
+          <tr><td><span class="chip bad"><i></i>Alarm</span> no moisture rise</td><td>Pump ran but the soil did not get wetter.</td><td>Check the water tank level, pump inlet filter, pipes and drip lines for leaks or blockages, and that sensors are in the soil. Then press <b>Reset alarm</b>.</td></tr>
+          <tr><td><span class="chip warn"><i></i>Sensor fault</span></td><td>A soil sensor reads out of range (unplugged, broken cable, water inside).</td><td>Check the cable and plug. The other sensors keep working. If all fail, auto watering stops; use Manual.</td></tr>
+          <tr><td><span class="chip warn"><i></i>Auto paused</span></td><td>You stopped the pump in Auto mode.</td><td>Auto resumes by itself after 30 minutes, or press <b>Resume auto</b>.</td></tr>
+          <tr><td><span class="chip idle"><i></i>Waiting for window</span></td><td>Soil is dry, but it is the hot middle of the day.</td><td>Normal. Watering starts in the next cool window, or straight away if the soil reaches the critical level.</td></tr>
+          <tr><td><span class="chip warn"><i></i>Connection lost</span></td><td>The phone can no longer reach the controller.</td><td>Move closer, rejoin the SolarIrrigation Wi-Fi, check the controller has power. The controller keeps watering on its own.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="split">
+      <div class="card prose">
+        <h2 style="margin-bottom:10px">Normal readings</h2>
+        <dl class="kv">
+          <dt>Soil moisture</dt><dd>Between start and target level</dd>
+          <dt>Air temperature</dt><dd>20–38 °C; dry-season afternoons can exceed 40 °C</dd>
+          <dt>Air humidity</dt><dd>30–90 %; lowest in the afternoon</dd>
+          <dt>Battery (12 V)</dt><dd>12.2–12.8 V resting, 13.0–14.4 V charging</dd>
+          <dt>Solar panel</dt><dd>17–21 V in sun; 0 W at night</dd>
+          <dt>Panel angle</dt><dd>15° morning → 90° noon → 165° evening</dd>
+        </dl>
+      </div>
+      <div class="card prose">
+        <h2 style="margin-bottom:10px">Care and safety</h2>
+        <ul>
+          <li><b>Weekly:</b> wipe dust off the solar panel, clean the pump inlet filter, check drip lines for blockages.</li>
+          <li><b>Monthly:</b> check battery terminals for corrosion, check cable glands on the box are tight, compare sensor readings with a hand squeeze test.</li>
+          <li>Disconnect the battery before touching wiring. Keep the control box closed and shaded.</li>
+          <li>Never run the pump dry. Keep the tank inlet below the water level.</li>
+          <li>Keep children away from the panel tracker while it moves.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="js/data.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
