@@ -1,0 +1,1033 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Solar Irrigation Controller</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: sticky status header, then a field-control hero (soil gauge + pump),
+   a strip of readings, 24-hour charts and the event log. Tabs for tracker,
+   setup and the farmer's guide. No external files: the ESP32 serves this offline. */
+:root{
+  --bg:#f2f4ec; --surface:#ffffff; --surface-2:#e8ebe0; --ink:#1a231c; --muted:#5a675c; --line:#d3d8c8;
+  --accent:#20694a; --accent-soft:#d6eadf; --water:#1d6aad; --water-soft:#d7e6f4; --sun:#b97c0c; --sun-soft:#f6e7c6;
+  --ok:#2c8547; --warn:#a86b10; --bad:#bb3326; --bad-soft:#f7dcd8; --warn-soft:#f6e8cd;
+  --font-display:"Avenir Next","Segoe UI Variable Display","Segoe UI","Helvetica Neue",system-ui,sans-serif;
+  --font-body:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans","Noto Sans Myanmar",sans-serif;
+  --font-data:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
+  --r:14px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f1410; --surface:#171f19; --surface-2:#202a22; --ink:#e6ece3; --muted:#97a499; --line:#2c372e;
+  --accent:#5cc08c; --accent-soft:#1e3a2b; --water:#5ea9e6; --water-soft:#183049; --sun:#efb540; --sun-soft:#3b2f15;
+  --ok:#5fc47f; --warn:#e3a93c; --bad:#f06c5c; --bad-soft:#41201c; --warn-soft:#3a2d14; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f1410; --surface:#171f19; --surface-2:#202a22; --ink:#e6ece3; --muted:#97a499; --line:#2c372e;
+  --accent:#5cc08c; --accent-soft:#1e3a2b; --water:#5ea9e6; --water-soft:#183049; --sun:#efb540; --sun-soft:#3b2f15;
+  --ok:#5fc47f; --warn:#e3a93c; --bad:#f06c5c; --bad-soft:#41201c; --warn-soft:#3a2d14; color-scheme:dark}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--font-body)}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
+.wrap{max-width:1180px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1,h2,h3{font-family:var(--font-display);margin:0;text-wrap:balance;letter-spacing:-.01em}
+h2{font-size:1.05rem;font-weight:650}
+h3{font-size:.95rem;font-weight:650}
+.num{font-variant-numeric:tabular-nums}
+.label{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.muted{color:var(--muted)}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:3px solid var(--water);outline-offset:2px}
+
+/* Header */
+header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:9;background:var(--surface);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;padding-block:10px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;min-width:0;margin-right:auto}
+.brand svg{flex:none}
+.brand h1{font-size:1.08rem;font-weight:700;line-height:1.15}
+.brand small{display:block;color:var(--muted);font-size:.76rem}
+.conn{display:inline-flex;align-items:center;gap:7px;font-size:.8rem;font-weight:600;padding:5px 11px;border-radius:999px;background:var(--surface-2);white-space:nowrap}
+.conn i{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.conn.live i{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 25%,transparent)}
+.conn.demo i{background:var(--sun)}
+.conn.lost i{background:var(--bad)}
+.clock{font-family:var(--font-data);font-size:.82rem;color:var(--muted)}
+nav.tabs{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none}
+nav.tabs .wrap{display:flex;gap:2px}
+.tab{appearance:none;border:0;background:none;padding:10px 14px;font-weight:600;font-size:.9rem;color:var(--muted);border-bottom:3px solid transparent;cursor:pointer;white-space:nowrap}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.tabbar{border-top:1px solid var(--line)}
+
+main{padding-block:18px 48px}
+section.view{display:grid;gap:16px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;min-width:0}
+.card-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+
+/* Banner */
+.banner{display:flex;gap:12px;align-items:flex-start;padding:12px 16px;border-radius:var(--r);border:1px solid;font-size:.92rem}
+.banner>div>b:first-child{display:block}
+.banner.demo{background:var(--sun-soft);border-color:color-mix(in srgb,var(--sun) 40%,transparent)}
+.banner.bad{background:var(--bad-soft);border-color:color-mix(in srgb,var(--bad) 45%,transparent)}
+.banner.warn{background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 45%,transparent)}
+.banner .act{margin-left:auto;flex:none}
+
+/* Hero */
+.hero{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:16px}
+@media (max-width:820px){.hero{grid-template-columns:1fr}}
+.soil{display:grid;grid-template-columns:minmax(0,230px) minmax(0,1fr);gap:18px;align-items:center}
+@media (max-width:520px){.soil{grid-template-columns:1fr}}
+.gauge{position:relative;width:100%;max-width:230px;margin:0 auto}
+.gauge svg{display:block;width:100%;height:auto}
+.gauge .read{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding-top:8px}
+.gauge .big{font-family:var(--font-display);font-size:3rem;font-weight:700;line-height:1}
+.gauge .big small{font-size:1.2rem;font-weight:600;color:var(--muted)}
+.gauge .state{font-size:.82rem;font-weight:650;margin-top:4px}
+.sensors{display:grid;gap:10px}
+.sensor-row{display:grid;grid-template-columns:72px minmax(0,1fr) 46px;gap:10px;align-items:center;font-size:.85rem}
+.bar{height:8px;border-radius:5px;background:var(--surface-2);position:relative;overflow:hidden}
+.bar>span{position:absolute;inset:0 auto 0 0;border-radius:5px;background:var(--water);transition:width .6s}
+.legend-key{display:flex;gap:14px;flex-wrap:wrap;font-size:.76rem;color:var(--muted)}
+.legend-key i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+
+.pump{display:grid;gap:14px}
+.pump-top{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.pump-btn{appearance:none;border:0;cursor:pointer;width:118px;height:118px;border-radius:50%;flex:none;display:grid;place-items:center;
+  font-family:var(--font-display);font-weight:700;font-size:1rem;color:#fff;background:var(--water);
+  box-shadow:0 0 0 6px var(--water-soft),0 6px 18px color-mix(in srgb,var(--water) 35%,transparent);transition:transform .12s}
+.pump-btn:active{transform:scale(.96)}
+.pump-btn.stop{background:var(--bad);box-shadow:0 0 0 6px var(--bad-soft),0 6px 18px color-mix(in srgb,var(--bad) 35%,transparent)}
+.pump-btn[disabled]{background:var(--muted);box-shadow:none;cursor:not-allowed;opacity:.7}
+.pump-btn svg{display:block;margin:0 auto 4px}
+.pump-info{min-width:0;flex:1;display:grid;gap:6px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;font-weight:700;padding:4px 10px;border-radius:999px;width:max-content;max-width:100%}
+.chip.run{background:var(--water-soft);color:var(--water)}
+.chip.idle{background:var(--surface-2);color:var(--muted)}
+.chip.soak{background:var(--accent-soft);color:var(--accent)}
+.chip.warn{background:var(--warn-soft);color:var(--warn)}
+.chip.bad{background:var(--bad-soft);color:var(--bad)}
+.chip i{width:7px;height:7px;border-radius:50%;background:currentColor}
+.chip.run i{animation:pulse 1.2s infinite}
+@keyframes pulse{50%{opacity:.25}}
+.speed{font-family:var(--font-display);font-size:2rem;font-weight:700;line-height:1}
+.speed small{font-size:.9rem;color:var(--muted);font-weight:600}
+.reason{font-size:.88rem}
+.seg{display:inline-grid;grid-auto-flow:column;background:var(--surface-2);border-radius:10px;padding:3px;gap:3px}
+.seg button{appearance:none;border:0;background:none;padding:7px 16px;border-radius:8px;font-weight:650;font-size:.86rem;cursor:pointer;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.manual-box{display:grid;gap:10px;padding:12px;border-radius:10px;background:var(--surface-2)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chips button{appearance:none;border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:5px 11px;font-size:.84rem;font-weight:600;cursor:pointer}
+.chips button[aria-pressed="true"]{border-color:var(--water);color:var(--water);background:var(--water-soft)}
+input[type=range]{width:100%;accent-color:var(--water)}
+
+/* Tiles */
+.tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+@media (max-width:1000px){.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:520px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;display:grid;gap:4px;align-content:start;min-width:0}
+.tile .v{font-family:var(--font-display);font-size:1.55rem;font-weight:700;line-height:1.1}
+.tile .v small{font-size:.85rem;color:var(--muted);font-weight:600;margin-left:2px}
+.tile .sub{font-size:.78rem;color:var(--muted)}
+.tile .flag{font-size:.72rem;font-weight:700}
+.flag.ok{color:var(--ok)} .flag.warn{color:var(--warn)} .flag.bad{color:var(--bad)}
+
+/* Charts */
+.charts{display:grid;gap:12px}
+.chart-wrap{position:relative}
+.chart-wrap svg{display:block;width:100%;height:210px}
+.chart-read{font-family:var(--font-data);font-size:.76rem;color:var(--muted);min-height:1.2em}
+.axis text{fill:var(--muted);font-size:10.5px;font-family:var(--font-data)}
+.grid line{stroke:var(--line)}
+
+/* Two-column lower area */
+.split{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px}
+@media (max-width:900px){.split{grid-template-columns:1fr}}
+.events{list-style:none;margin:0;padding:0;display:grid;gap:0;max-height:340px;overflow:auto}
+.events li{display:grid;grid-template-columns:52px 10px minmax(0,1fr);gap:8px;padding:7px 0;border-top:1px solid var(--line);font-size:.85rem;align-items:baseline}
+.events li:first-child{border-top:0}
+.events time{font-family:var(--font-data);font-size:.76rem;color:var(--muted)}
+.events .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);align-self:center}
+.events .w .dot{background:var(--warn)} .events .e .dot{background:var(--bad)}
+
+/* Forms */
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px 18px}
+.field{display:grid;gap:5px;min-width:0}
+.field label{font-weight:600;font-size:.86rem}
+.field .hint{font-size:.76rem;color:var(--muted)}
+.field input[type=number],.field input[type=text],.field input[type=password],.field select{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
+.inline{display:flex;gap:8px;align-items:center}
+.inline input{min-width:0}
+.check{display:flex;gap:9px;align-items:flex-start;font-size:.88rem}
+.check input{margin-top:3px;accent-color:var(--accent);width:17px;height:17px}
+.btn{appearance:none;border:1px solid var(--line);background:var(--surface);padding:9px 16px;border-radius:9px;font-weight:650;cursor:pointer;font-size:.88rem}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.water{background:var(--water);border-color:var(--water);color:#fff}
+.btn.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 50%,var(--line))}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.sm{padding:6px 11px;font-size:.8rem}
+fieldset{border:0;margin:0;padding:0;display:grid;gap:14px}
+legend{padding:0;margin-bottom:4px}
+.sec-title{display:flex;gap:10px;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:4px}
+.band-preview{height:26px;border-radius:7px;position:relative;background:var(--surface-2);overflow:hidden}
+.band-preview span{position:absolute;top:0;bottom:0}
+.band-preview b{position:absolute;top:0;bottom:0;width:2px;background:var(--ink)}
+
+table{border-collapse:collapse;width:100%;font-size:.87rem}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}
+.tscroll{overflow-x:auto}
+
+/* Tracker */
+.tracker{display:grid;grid-template-columns:minmax(0,280px) minmax(0,1fr);gap:20px;align-items:center}
+@media (max-width:640px){.tracker{grid-template-columns:1fr}}
+.tracker svg{width:100%;max-width:280px;height:auto;display:block;margin:0 auto}
+
+/* Guide */
+.guide{display:grid;gap:16px}
+.prose{max-width:72ch}
+.prose p,.prose li{margin:0 0 .6em}
+.prose ul,.prose ol{padding-left:1.25em;margin:0 0 .6em}
+.steps{counter-reset:s;list-style:none;padding:0;margin:0;display:grid;gap:10px}
+.steps li{counter-increment:s;display:grid;grid-template-columns:30px minmax(0,1fr);gap:10px;align-items:start}
+.steps li::before{content:counter(s);width:26px;height:26px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-weight:700;display:grid;place-items:center;font-size:.85rem}
+.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 14px;font-size:.88rem}
+.kv dt{color:var(--muted)} .kv dd{margin:0;font-family:var(--font-data);font-size:.82rem;overflow-wrap:anywhere}
+
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%) translateY(20px);background:var(--ink);color:var(--bg);padding:10px 18px;border-radius:10px;font-weight:600;font-size:.88rem;opacity:0;transition:.25s;pointer-events:none;z-index:20;max-width:calc(100% - 32px)}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <svg width="38" height="38" viewBox="0 0 38 38" aria-hidden="true">
+        <circle cx="13" cy="13" r="6" fill="var(--sun)"/>
+        <g stroke="var(--sun)" stroke-width="2" stroke-linecap="round"><path d="M13 2v3M13 21v3M2 13h3M21 13h3M5.2 5.2l2.1 2.1M18.7 18.7l2.1 2.1M5.2 20.8l2.1-2.1M18.7 7.3l2.1-2.1"/></g>
+        <path d="M27 14c3.5 4.6 6 8.2 6 11.5a6 6 0 0 1-12 0c0-3.3 2.5-6.9 6-11.5z" fill="var(--water)"/>
+        <path d="M4 34h30" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+      <div><h1>Solar Irrigation Controller</h1><small>Central Dry Zone · tomato, chili &amp; onion plots</small></div>
+    </div>
+    <span class="clock num" id="clock">--:--</span>
+    <span class="conn" id="conn"><i></i><span>Connecting…</span></span>
+  </div>
+  <div class="tabbar"><div class="wrap"><nav class="tabs" role="tablist" aria-label="Sections">
+    <button class="tab" role="tab" data-view="overview" aria-selected="true">Overview</button>
+    <button class="tab" role="tab" data-view="control" aria-selected="false">Tracker &amp; sensors</button>
+    <button class="tab" role="tab" data-view="setup" aria-selected="false">Setup</button>
+    <button class="tab" role="tab" data-view="guide" aria-selected="false">User guide</button>
+  </nav></div></div>
+</header>
+
+<main class="wrap">
+  <div id="banners" style="display:grid;gap:10px;margin-bottom:16px"></div>
+
+  <!-- ============ OVERVIEW ============ -->
+  <section class="view" id="view-overview">
+    <div class="hero">
+      <div class="card">
+        <div class="card-head"><h2>Soil moisture</h2><span class="label" id="cropLabel">Tomato profile</span></div>
+        <div class="soil">
+          <div class="gauge">
+            <svg id="gauge" viewBox="0 0 220 200" role="img" aria-label="Soil moisture gauge"></svg>
+            <div class="read"><div class="big num" id="soilBig">--<small>%</small></div><div class="state" id="soilState">—</div></div>
+          </div>
+          <div style="display:grid;gap:14px;min-width:0">
+            <div class="sensors" id="sensorBars"></div>
+            <div class="legend-key">
+              <span><i style="background:var(--bad-soft);border:1px solid var(--bad)"></i>Critical</span>
+              <span><i style="background:var(--accent-soft);border:1px solid var(--accent)"></i>Target band</span>
+              <span><i style="background:var(--water)"></i>Now</span>
+            </div>
+            <p class="muted" style="margin:0;font-size:.84rem" id="soilExplain">—</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card pump">
+        <div class="card-head" style="margin-bottom:0"><h2>Water pump</h2>
+          <div class="seg" role="group" aria-label="Control mode">
+            <button id="modeAuto" aria-pressed="true">Auto</button>
+            <button id="modeManual" aria-pressed="false">Manual</button>
+          </div>
+        </div>
+        <div class="pump-top">
+          <button class="pump-btn" id="pumpBtn" aria-live="polite">
+            <span><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3c3.5 4.6 6 8 6 11.2A6 6 0 0 1 6 14.2C6 11 8.5 7.6 12 3z"/></svg><span id="pumpBtnText">Run pump</span></span>
+          </button>
+          <div class="pump-info">
+            <span class="chip idle" id="pumpChip"><i></i><span>Standby</span></span>
+            <div class="speed num" id="pumpSpeed">0<small>% speed</small></div>
+            <div class="bar" style="height:6px"><span id="pumpBar" style="width:0%"></span></div>
+            <div class="reason" id="pumpReason">—</div>
+            <div class="muted num" style="font-size:.82rem" id="pumpTimer"></div>
+          </div>
+        </div>
+        <div class="manual-box">
+          <div class="row" style="justify-content:space-between"><span class="label">Manual run settings</span><span class="num" style="font-weight:700" id="mSpeedOut">80%</span></div>
+          <input type="range" id="mSpeed" min="30" max="100" step="5" value="80" aria-label="Manual pump speed">
+          <div class="row" style="justify-content:space-between">
+            <div class="chips" id="mMinutes" role="group" aria-label="Run time">
+              <button data-min="2" aria-pressed="false">2 min</button><button data-min="5" aria-pressed="true">5 min</button><button data-min="10" aria-pressed="false">10 min</button><button data-min="15" aria-pressed="false">15 min</button>
+            </div>
+            <span class="muted num" style="font-size:.8rem" id="mEstimate">≈ 32 L</span>
+          </div>
+          <p class="muted" style="margin:0;font-size:.78rem">Runs stop automatically after the selected time. In Auto mode a manual stop pauses automatic watering for 30 minutes.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="tiles" id="tiles"></div>
+
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><h2>Last 24 hours</h2>
+          <div class="seg" role="group" aria-label="Chart">
+            <button data-chart="soil" aria-pressed="true">Soil &amp; pump</button>
+            <button data-chart="air" aria-pressed="false">Air</button>
+            <button data-chart="power" aria-pressed="false">Power</button>
+          </div>
+        </div>
+        <div class="legend-key" id="chartLegend" style="margin-bottom:6px"></div>
+        <div class="chart-wrap"><svg id="chart" preserveAspectRatio="none"></svg></div>
+        <div class="chart-read" id="chartRead">Touch or hover the chart to read values.</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Activity log</h2><span class="label">Newest first</span></div>
+        <ul class="events" id="events"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TRACKER & SENSORS ============ -->
+  <section class="view" id="view-control" hidden>
+    <div class="card">
+      <div class="card-head"><h2>Solar tracker</h2><span class="label" id="trkMode">Automatic (time based)</span></div>
+      <div class="tracker">
+        <svg id="trackerSvg" viewBox="0 0 280 170" role="img" aria-label="Panel angle"></svg>
+        <div style="display:grid;gap:12px;min-width:0">
+          <p style="margin:0">The panel turns east to west through the day following the sun's expected position: <b>15°</b> at sunrise (06:00), <b>90°</b> at noon, <b>165°</b> at sunset (18:00). It moves every 15 minutes and parks facing east overnight, ready for the morning sun.</p>
+          <div class="seg" role="group" aria-label="Tracker mode"><button id="trkAuto" aria-pressed="true">Automatic</button><button id="trkManual" aria-pressed="false">Manual angle</button></div>
+          <div id="trkManualBox" class="manual-box" hidden>
+            <div class="row" style="justify-content:space-between"><span class="label">Panel angle</span><b class="num" id="trkAngleOut">90°</b></div>
+            <input type="range" id="trkAngle" min="0" max="180" step="5" value="90" aria-label="Panel angle">
+            <div class="row"><button class="btn water sm" id="trkMove">Move panel</button><span class="muted" style="font-size:.8rem">Use for testing or cleaning. Switch back to Automatic afterwards.</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Soil sensor calibration</h2><span class="label">Do this once per sensor</span></div>
+      <ol class="steps" style="margin-bottom:14px">
+        <li><span>Hold the sensor in <b>dry air</b> (or completely dry soil from the field) and press <b>Save as dry</b>.</span></li>
+        <li><span>Put the sensor in a glass of <b>water</b> up to the line, or in fully soaked soil, and press <b>Save as wet</b>.</span></li>
+        <li><span>Install the sensor at root depth (10–15 cm for tomato and chili, 5–10 cm for onion). Repeat each season or if readings look wrong.</span></li>
+      </ol>
+      <div class="tscroll"><table>
+        <thead><tr><th>Sensor</th><th>Raw now</th><th>Moisture</th><th>Dry point</th><th>Wet point</th><th>Status</th><th>Calibrate</th></tr></thead>
+        <tbody id="calBody"></tbody>
+      </table></div>
+    </div>
+
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><h2>System</h2></div>
+        <dl class="kv" id="sysInfo"></dl>
+        <div class="row" style="margin-top:14px">
+          <button class="btn" id="syncClock">Set clock from this phone</button>
+          <button class="btn danger" id="clearAlarm">Reset alarm</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Join a Wi-Fi router</h2><span class="label">Optional</span></div>
+        <p class="muted" style="margin:0 0 12px;font-size:.86rem">The controller always keeps its own hotspot. Joining a router with internet also sets the clock automatically.</p>
+        <form id="wifiForm" style="display:grid;gap:10px">
+          <div class="field"><label for="wSsid">Network name</label><input type="text" id="wSsid" autocomplete="off"></div>
+          <div class="field"><label for="wPass">Password</label><input type="password" id="wPass" autocomplete="off"></div>
+          <div><button class="btn primary" type="submit">Save and restart</button></div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SETUP ============ -->
+  <section class="view" id="view-setup" hidden>
+    <form id="setForm" class="card" style="display:grid;gap:22px">
+      <div class="card-head" style="margin:0"><h2>Watering settings</h2>
+        <div class="row"><button class="btn" type="button" id="setReload">Reload</button><button class="btn primary" type="submit">Save settings</button></div>
+      </div>
+
+      <fieldset>
+        <div class="sec-title"><h3>Crop profile</h3><span class="muted" style="font-size:.82rem">Sets moisture levels for the crop. You can fine-tune them below.</span></div>
+        <div class="form-grid">
+          <div class="field"><label for="s_crop">Crop</label>
+            <select id="s_crop"><option value="0">Tomato</option><option value="1">Chili</option><option value="2">Onion</option><option value="3">Custom</option></select>
+            <span class="hint" id="cropHint"></span></div>
+          <div class="field"><label>Moisture bands</label><div class="band-preview" id="bandPreview"></div><span class="hint">Red: critical. Amber: start watering. Green: target band.</span></div>
+        </div>
+        <div class="form-grid">
+          <div class="field"><label for="s_startPct">Start watering below (%)</label><input type="number" id="s_startPct" min="5" max="90"><span class="hint">Pump starts when the average soil moisture falls below this.</span></div>
+          <div class="field"><label for="s_targetPct">Stop watering at (%)</label><input type="number" id="s_targetPct" min="10" max="95"><span class="hint">Pump stops here. Keep at least 10 above the start level.</span></div>
+          <div class="field"><label for="s_criticalPct">Critical level (%)</label><input type="number" id="s_criticalPct" min="0" max="80"><span class="hint">Below this the pump runs at full speed, even outside watering hours.</span></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <div class="sec-title"><h3>Pump behaviour</h3></div>
+        <div class="form-grid">
+          <div class="field"><label for="s_minSpeed">Lowest pump speed (%)</label><input type="number" id="s_minSpeed" min="20" max="100"><span class="hint">Speed when the soil is only a little dry. Below ~40 % many DC pumps stall.</span></div>
+          <div class="field"><label for="s_pulseRunMin">Run for at most (minutes)</label><input type="number" id="s_pulseRunMin" min="1" max="60" step="0.5"><span class="hint">Then pause so water soaks in instead of running off.</span></div>
+          <div class="field"><label for="s_soakMin">Soak pause (minutes)</label><input type="number" id="s_soakMin" min="0" max="60" step="0.5"><span class="hint">Sandy soil: 5. Loam: 10. Clay: 15–20.</span></div>
+          <div class="field"><label for="s_pumpLpm">Pump flow at full speed (L/min)</label><input type="number" id="s_pumpLpm" min="0.1" max="200" step="0.1"><span class="hint">Measure with a bucket and a timer. Used for water totals.</span></div>
+          <div class="field"><label for="s_dailyLimitL">Daily water limit (L)</label><input type="number" id="s_dailyLimitL" min="1" step="1"><span class="hint">Auto watering stops for the day after this amount.</span></div>
+          <div class="field"><label for="s_manualMaxMin">Longest manual run (minutes)</label><input type="number" id="s_manualMaxMin" min="1" max="120"></div>
+        </div>
+        <label class="check"><input type="checkbox" id="s_hotBoost"><span><b>Hot-day boost.</b> Raise the target by 5 % when the air is above 35 °C.</span></label>
+      </fieldset>
+
+      <fieldset>
+        <div class="sec-title"><h3>Watering hours</h3></div>
+        <label class="check"><input type="checkbox" id="s_useWindows"><span><b>Water only in cool hours</b> (morning and evening). Less water is lost to evaporation. Critically dry soil is still watered at any time.</span></label>
+        <div class="form-grid">
+          <div class="field"><label for="s_w1Start">Morning window</label><div class="inline"><input type="number" id="s_w1Start" min="0" max="23" aria-label="Morning start hour"><span>to</span><input type="number" id="s_w1End" min="0" max="24" aria-label="Morning end hour"><span class="muted">h</span></div></div>
+          <div class="field"><label for="s_w2Start">Evening window</label><div class="inline"><input type="number" id="s_w2Start" min="0" max="23" aria-label="Evening start hour"><span>to</span><input type="number" id="s_w2End" min="0" max="24" aria-label="Evening end hour"><span class="muted">h</span></div></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <div class="sec-title"><h3>Protection</h3></div>
+        <div class="form-grid">
+          <div class="field"><label for="s_batCutoffV">Stop pump below battery (V)</label><input type="number" id="s_batCutoffV" min="9" max="14" step="0.1"><span class="hint">12 V lead-acid: 11.6 V. 12 V LiFePO₄: 12.0 V.</span></div>
+          <div class="field"><label for="s_batResumeV">Allow pump again above (V)</label><input type="number" id="s_batResumeV" min="9" max="15" step="0.1"></div>
+          <div class="field"><label for="s_noRiseMin">Dry-run alarm after (pump minutes)</label><input type="number" id="s_noRiseMin" min="2" max="60"><span class="hint">Alarm if the soil does not get wetter. Usually an empty tank or a broken pipe.</span></div>
+          <div class="field"><label for="s_sensorCount">Soil sensors installed</label><select id="s_sensorCount"><option>1</option><option>2</option><option>3</option></select></div>
+        </div>
+      </fieldset>
+    </form>
+  </section>
+
+  <!-- ============ GUIDE ============ -->
+  <section class="view guide" id="view-guide" hidden>
+    <div class="card prose">
+      <h2 style="margin-bottom:10px">Getting started</h2>
+      <ol class="steps">
+        <li><span>Switch on the controller. Within 10 seconds it creates a Wi-Fi hotspot called <b>SolarIrrigation</b>.</span></li>
+        <li><span>On your phone, join that Wi-Fi (password <b>irrigate123</b> unless it was changed). Ignore the "no internet" message.</span></li>
+        <li><span>Open a browser and go to <b>http://192.168.4.1</b> or <b>http://irrigation.local</b>. Add it to your home screen for one-tap access.</span></li>
+        <li><span>The pill at the top right shows <b>Live</b> when data comes from the controller. <b>Demo</b> means you are viewing simulated data.</span></li>
+        <li><span>The first time, check <b>Setup → Crop</b>, calibrate each soil sensor (<b>Tracker &amp; sensors</b> tab) and press <b>Set clock from this phone</b> if the clock shows "not set".</span></li>
+      </ol>
+    </div>
+
+    <div class="card prose">
+      <h2 style="margin-bottom:10px">How automatic watering works</h2>
+      <p>The controller runs this cycle every second. It waters only as much as the crop needs, when it needs it.</p>
+      <ol class="steps">
+        <li><span><b>Measure.</b> Read every soil sensor, ignore any that are disconnected, and average the rest. One faulty sensor can't flood or dry out the field.</span></li>
+        <li><span><b>Decide.</b> If the average is below the <b>start level</b> and it is a watering hour, start a cycle. Between start and target nothing changes. This gap stops the pump from switching on and off all the time.</span></li>
+        <li><span><b>Choose the speed.</b> The drier the soil, the faster the pump. At or below the critical level it runs at 100 %. Close to the target it slows to the lowest speed. This saves battery and avoids high pressure and runoff.</span></li>
+        <li><span><b>Pulse and soak.</b> After the run time (default 5 min) the pump pauses (default 10 min) so water sinks to the roots before the sensor is read again. This gives deeper roots and less waste.</span></li>
+        <li><span><b>Stop at target.</b> When the soil reaches the target level the pump stops and the cycle ends.</span></li>
+        <li><span><b>Protect.</b> The pump is blocked if the battery is low, if the daily water limit is reached, or if the soil does not get wetter while pumping (empty tank or broken pipe). Each event is written to the activity log.</span></li>
+      </ol>
+    </div>
+
+    <div class="card prose">
+      <h2 style="margin-bottom:10px">Auto or manual?</h2>
+      <ul>
+        <li><b>Auto (recommended for every day).</b> The controller waters by itself. You can still press <b>Run pump</b> for an extra timed watering. If you press <b>Stop</b>, auto watering pauses for 30 minutes, or until you press <b>Resume auto</b>.</li>
+        <li><b>Manual.</b> The pump runs only when you press <b>Run pump</b>, and stops after the time you choose. Use it when testing, flushing pipes, applying fertiliser through the water, or if a sensor is broken.</li>
+        <li>Low-battery protection and the run-time limit stay on in both modes.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:10px">Crop settings</h2>
+      <p class="muted" style="margin:0 0 10px;font-size:.86rem">Starting values, as a percentage of the calibrated sensor range. Check by hand: squeeze soil from root depth. It should hold together without dripping.</p>
+      <div class="tscroll"><table>
+        <thead><tr><th>Crop</th><th>Start below</th><th>Stop at</th><th>Critical</th><th>Sensor depth</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><b>Tomato</b></td><td class="num">45 %</td><td class="num">70 %</td><td class="num">30 %</td><td>10–15 cm</td><td>Keep moisture even. Big swings cause fruit cracking and blossom-end rot. Needs the most water while flowering and fruiting.</td></tr>
+          <tr><td><b>Chili</b></td><td class="num">40 %</td><td class="num">65 %</td><td class="num">28 %</td><td>10–15 cm</td><td>Tolerates slightly drier soil, but not waterlogging. Water stress while flowering makes flowers drop.</td></tr>
+          <tr><td><b>Onion</b></td><td class="num">50 %</td><td class="num">75 %</td><td class="num">35 %</td><td>5–10 cm</td><td>Shallow roots need frequent light watering. Lower the target 2–3 weeks before harvest so bulbs cure well.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:10px">Alerts and what to do</h2>
+      <div class="tscroll"><table>
+        <thead><tr><th>You see</th><th>Meaning</th><th>What to do</th></tr></thead>
+        <tbody>
+          <tr><td><span class="chip bad"><i></i>Battery lockout</span></td><td>Battery below the cut-off voltage. The pump is blocked to protect the battery.</td><td>Wait for sun; the pump is allowed again above the resume voltage. Clean the panel. After several cloudy days, water by hand.</td></tr>
+          <tr><td><span class="chip bad"><i></i>Alarm</span> no moisture rise</td><td>Pump ran but the soil did not get wetter.</td><td>Check the water tank level, pump inlet filter, pipes and drip lines for leaks or blockages, and that sensors are in the soil. Then press <b>Reset alarm</b>.</td></tr>
+          <tr><td><span class="chip warn"><i></i>Sensor fault</span></td><td>A soil sensor reads out of range (unplugged, broken cable, water inside).</td><td>Check the cable and plug. The other sensors keep working. If all fail, auto watering stops; use Manual.</td></tr>
+          <tr><td><span class="chip warn"><i></i>Auto paused</span></td><td>You stopped the pump in Auto mode.</td><td>Auto resumes by itself after 30 minutes, or press <b>Resume auto</b>.</td></tr>
+          <tr><td><span class="chip idle"><i></i>Waiting for window</span></td><td>Soil is dry, but it is the hot middle of the day.</td><td>Normal. Watering starts in the next cool window, or straight away if the soil reaches the critical level.</td></tr>
+          <tr><td><span class="chip warn"><i></i>Connection lost</span></td><td>The phone can no longer reach the controller.</td><td>Move closer, rejoin the SolarIrrigation Wi-Fi, check the controller has power. The controller keeps watering on its own.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="split">
+      <div class="card prose">
+        <h2 style="margin-bottom:10px">Normal readings</h2>
+        <dl class="kv">
+          <dt>Soil moisture</dt><dd>Between start and target level</dd>
+          <dt>Air temperature</dt><dd>20–38 °C; dry-season afternoons can exceed 40 °C</dd>
+          <dt>Air humidity</dt><dd>30–90 %; lowest in the afternoon</dd>
+          <dt>Battery (12 V)</dt><dd>12.2–12.8 V resting, 13.0–14.4 V charging</dd>
+          <dt>Solar panel</dt><dd>17–21 V in sun; 0 W at night</dd>
+          <dt>Panel angle</dt><dd>15° morning → 90° noon → 165° evening</dd>
+        </dl>
+      </div>
+      <div class="card prose">
+        <h2 style="margin-bottom:10px">Care and safety</h2>
+        <ul>
+          <li><b>Weekly:</b> wipe dust off the solar panel, clean the pump inlet filter, check drip lines for blockages.</li>
+          <li><b>Monthly:</b> check battery terminals for corrosion, check cable glands on the box are tight, compare sensor readings with a hand squeeze test.</li>
+          <li>Disconnect the battery before touching wiring. Keep the control box closed and shaded.</li>
+          <li>Never run the pump dry. Keep the tank inlet below the water level.</li>
+          <li>Keep children away from the panel tracker while it moves.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+// ======================================================================
+//  Data sources: the real ESP32 API, or a built-in simulator (demo mode)
+// ======================================================================
+const PRESETS = {
+  0:{name:"Tomato",startPct:45,targetPct:70,criticalPct:30,hint:"Even moisture prevents fruit cracking."},
+  1:{name:"Chili", startPct:40,targetPct:65,criticalPct:28,hint:"Slightly drier; avoid waterlogging."},
+  2:{name:"Onion", startPct:50,targetPct:75,criticalPct:35,hint:"Shallow roots: frequent, light watering."},
+  3:{name:"Custom",hint:"Set your own levels below."}
+};
+
+const Live = {
+  async get(path){
+    const c = new AbortController(); const t = setTimeout(()=>c.abort(), 4000);
+    try{ const r = await fetch(path,{signal:c.signal,cache:"no-store"}); if(!r.ok) throw new Error(r.status); return await r.json(); }
+    finally{ clearTimeout(t); }
+  },
+  async post(path, params){
+    const r = await fetch(path,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams(params)});
+    let j={}; try{ j = await r.json(); }catch(e){}
+    if(!r.ok || j.ok===false) throw new Error(j.msg || ("Request failed ("+r.status+")"));
+    return j;
+  },
+  status(){ return this.get("/api/status"); },
+  history(){ return this.get("/api/history"); },
+  cmd(p){ return this.post("/api/cmd", p); },
+  saveSettings(p){ return this.post("/api/settings", p); },
+  wifi(p){ return this.post("/api/wifi", p); }
+};
+
+class Sim {
+  constructor(){
+    this.tz = -new Date().getTimezoneOffset();
+    this.cfg = {crop:0,startPct:45,targetPct:70,criticalPct:30,minSpeed:45,pulseRunSec:300,soakSec:600,useWindows:true,
+      w1Start:5,w1End:9,w2Start:16,w2End:19,batCutoffV:11.6,batResumeV:12.3,manualMaxMin:15,pumpLpm:8,dailyLimitL:400,
+      hotBoost:true,noRiseMin:8,sensorCount:3,tzMin:this.tz,dryRaw:[3200,3170,3240],wetRaw:[1300,1330,1280]};
+    this.mode="auto"; this.state="idle"; this.speed=0; this.src="off"; this.reason="";
+    this.manualEnd=0; this.manualSpeed=80; this.holdEnd=0; this.pulseStart=0; this.soakStart=0;
+    this.alarm=""; this.low=false; this.soc=.62; this.m=58; this.off=[0,-3.2,2.6];
+    this.trkManual=false; this.trkManualAngle=90; this.angle=90;
+    this.liters=0; this.pumpSec=0; this.wh=0; this.day=null;
+    this.events=[]; this.hist=[]; this.start=Date.now()/1000;
+    this.seed();
+  }
+  log(l,m,t){ this.events.unshift({t:Math.round(t??this.t),l,m}); this.events.length=Math.min(this.events.length,25); }
+  hour(t){ const d=new Date(t*1000); return d.getHours()+d.getMinutes()/60; }
+  env(t){ const h=this.hour(t), sun=Math.max(0,Math.sin(Math.PI*(h-6)/12)), w=Math.sin(2*Math.PI*(h-9)/24);
+    return {h,sun,temp:30+7*w,hum:60-22*w}; }
+  effTarget(temp){ return Math.min(95,this.cfg.targetPct + (this.cfg.hotBoost && temp>35 ? 5 : 0)); }
+  inWin(t){ if(!this.cfg.useWindows) return true; const h=this.hour(t), c=this.cfg;
+    return (h>=c.w1Start&&h<c.w1End)||(h>=c.w2Start&&h<c.w2End); }
+  socToV(s){ return 10.5 + 2.23*Math.pow(Math.max(0,Math.min(1,s)),.75); }
+  trackAngle(t){ const h=this.hour(t); if(h<6||h>18.5) return 15; return 15 + Math.max(0,Math.min(1,(h-6)/12))*150; }
+  physics(dt,t,gain){
+    const e=this.env(t); this.e=e;
+    const evap=(0.6+3.5*e.sun*(e.temp/32))/3600, add=300/3600*this.speed/100;
+    this.m=Math.max(8,Math.min(97,this.m+(add*Math.min(gain,4)-evap*gain)*dt));
+    this.angle = this.trkManual ? this.trkManualAngle : Math.round(this.trackAngle(t));
+    const gainTrk = this.trkManual ? Math.max(.2,Math.cos((this.angle-this.trackAngle(t))*Math.PI/180)) : 1;
+    this.pv = 62*e.sun*gainTrk;
+    const load = 2.5 + 42*this.speed/100;
+    this.soc=Math.max(.04,Math.min(1,this.soc+(this.pv*.85-load)*dt*gain/(240*3600)));
+    this.batV = this.socToV(this.soc) + (this.pv>load ? .35*Math.min(1,(this.pv-load)/30) : -.12*this.speed/100);
+    if(!this.low && this.batV<this.cfg.batCutoffV){ this.low=true; this.log("w","Battery low ("+this.batV.toFixed(2)+" V) - pump disabled",t); }
+    if(this.low && this.batV>this.cfg.batResumeV){ this.low=false; this.log("i","Battery recovered - pump allowed",t); }
+  }
+  control(t){
+    const c=this.cfg; let want=0, src="off";
+    if(this.manualEnd && t>=this.manualEnd){ this.manualEnd=0; this.log("i","Manual run finished",t); if(this.mode==="auto") this.holdEnd=t+1800; }
+    if(this.manualEnd){
+      if(this.m>=95){ this.manualEnd=0; this.log("i","Manual run stopped: soil saturated",t); }
+      else { want=this.manualSpeed; src="manual"; this.reason="Manual run"; }
+    }
+    if(!this.manualEnd){
+      if(this.mode==="manual"){ this.reason="Manual mode - press Run pump to water"; this.state="idle"; }
+      else if(this.holdEnd>t){ this.reason="Auto paused after manual stop"; this.state="idle"; }
+      else if(this.alarm){ this.reason="Alarm - check system, then reset"; this.state="idle"; }
+      else if(this.liters>=c.dailyLimitL){ this.reason="Daily water limit reached"; this.state="idle"; }
+      else {
+        this.holdEnd=0;
+        const tgt=this.effTarget(this.e.temp), allowed=this.inWin(t)||this.m<c.criticalPct;
+        if(this.state==="idle"){
+          if(this.m<c.startPct && allowed){ this.state="watering"; this.pulseStart=t; this.log("i","Auto watering started (soil "+Math.round(this.m)+"%)",t); }
+          else this.reason = this.m<c.startPct ? "Soil dry - waiting for watering window" : "Soil moisture OK";
+        }
+        if(this.state==="watering"){
+          if(this.m>=tgt){ this.state="idle"; this.reason="Target reached"; this.log("i","Target reached ("+Math.round(this.m)+"%) - pump stopped",t); }
+          else if(!allowed){ this.state="idle"; this.reason="Outside watering window"; this.log("i","Watering window closed",t); }
+          else if(t-this.pulseStart>=c.pulseRunSec){ this.state="soaking"; this.soakStart=t; }
+          else { want=this.autoSpeed(this.m,tgt); src="auto"; this.reason="Watering: soil below target"; }
+        } else if(this.state==="soaking"){
+          this.reason="Soaking - letting water reach the roots";
+          if(this.m>=tgt){ this.state="idle"; this.reason="Target reached"; }
+          else if(t-this.soakStart>=c.soakSec){ this.state="watering"; this.pulseStart=t; }
+        }
+      }
+    }
+    if(want>0 && this.low){ want=0; src="off"; this.reason="Battery low - pump locked out"; }
+    this.speed=want; this.src=want?src:"off";
+  }
+  autoSpeed(m,tgt){ const c=this.cfg; if(m<=c.criticalPct) return 100;
+    const d=Math.max(0,Math.min(1,(tgt-m)/Math.max(1,tgt-c.criticalPct))); return Math.round(c.minSpeed+d*(100-c.minSpeed)); }
+  totals(dt,t){
+    const d=new Date(t*1000).toDateString();
+    if(this.day && d!==this.day){ this.liters=0; this.pumpSec=0; this.wh=0; this.log("i","New day - counters reset",t); }
+    this.day=d;
+    if(this.speed>0){ this.liters+=this.cfg.pumpLpm*this.speed/100*dt/60; this.pumpSec+=dt; }
+    this.wh+=this.pv*dt/3600;
+  }
+  record(t,pumpMax){
+    const e=this.e;
+    this.hist.push([Math.round(t),Math.round(this.m*10),Math.round(e.temp*10),Math.round(e.hum*10),Math.round(this.batV*100),Math.round(this.pv*10),Math.round(pumpMax)]);
+    if(this.hist.length>288) this.hist.shift();
+  }
+  seed(){
+    const now=Math.floor(Date.now()/1000); let t=now-86400;
+    this.t=t; this.log("i","Controller started (fw 1.0.0)",t);
+    for(; t<=now; t+=300){
+      this.t=t; this.physics(300,t,1); this.control(t); this.totals(300,t);
+      this.record(t,this.speed);
+    }
+    this.t=now; this.lastHist=now; this.lastReal=Date.now()/1000; this.pumpMax=0;
+    this.mode="auto"; this.manualEnd=0;
+  }
+  tick(){
+    const real=Date.now()/1000; let dt=Math.min(10,real-this.lastReal); this.lastReal=real;
+    while(dt>0){ const s=Math.min(1,dt); dt-=s; this.t+=s;
+      this.physics(s,this.t,20); this.control(this.t); this.totals(s,this.t); this.pumpMax=Math.max(this.pumpMax,this.speed);
+      if(this.t-this.lastHist>=300){ this.lastHist=this.t; this.record(this.t,this.pumpMax); this.pumpMax=0; }
+    }
+  }
+  async status(){
+    this.tick(); const t=this.t, e=this.e, c=this.cfg, j=()=> (Math.random()-.5);
+    const sensors=[0,1,2].slice(0,c.sensorCount).map(i=>{ const pct=Math.max(0,Math.min(100,this.m+this.off[i]+j()*.8));
+      return {raw:Math.round(c.dryRaw[i]-pct/100*(c.dryRaw[i]-c.wetRaw[i])),pct:+pct.toFixed(1),ok:true}; });
+    const avg=sensors.reduce((a,s)=>a+s.pct,0)/sensors.length;
+    const solarV=this.pv>1?17.6+1.6*e.sun+j()*.2:+(e.sun*8).toFixed(1);
+    const state=this.manualEnd?"manual":this.low?"lockout":this.alarm?"alarm":this.holdEnd>t?"hold":this.mode==="manual"?"manual-idle":this.state;
+    return {fw:"1.0.0-demo",uptime:Math.round(Date.now()/1000-this.start),time:Math.round(t),tzMin:this.tz,mode:this.mode,
+      pump:{speed:this.speed,target:this.speed,source:this.src,state,reason:this.reason,
+        manualLeft:this.manualEnd?Math.max(0,Math.round(this.manualEnd-t)):0, holdLeft:this.holdEnd>t?Math.round(this.holdEnd-t):0,
+        pulseLeft:this.state==="watering"&&!this.manualEnd?Math.max(0,Math.round(c.pulseRunSec-(t-this.pulseStart))):0,
+        soakLeft:this.state==="soaking"?Math.max(0,Math.round(c.soakSec-(t-this.soakStart))):0, manualSpeed:this.manualSpeed},
+      soil:{avg:+avg.toFixed(1),effTarget:this.effTarget(e.temp),sensors},
+      air:{temp:+(e.temp+j()*.3).toFixed(1),hum:+(e.hum+j()).toFixed(1)},
+      power:{batV:+this.batV.toFixed(2),batPct:Math.round(batPct(this.batV)),solarV:+solarV.toFixed(1),solarA:+(this.pv/Math.max(1,solarV)).toFixed(2),solarW:+this.pv.toFixed(1),lowBattery:this.low},
+      tracker:{angle:this.angle,manual:this.trkManual},
+      today:{liters:+this.liters.toFixed(1),pumpMin:+(this.pumpSec/60).toFixed(1),solarWh:+this.wh.toFixed(1)},
+      alarm:this.alarm, wifi:{ap:"SolarIrrigation",sta:"",rssi:0}, settings:JSON.parse(JSON.stringify(c)), events:this.events.slice()};
+  }
+  async history(){ this.tick(); return {period:300,timeValid:true,now:Math.round(this.t),rows:this.hist.slice()}; }
+  async cmd(p){
+    const t=this.t;
+    switch(p.do){
+      case "mode": this.mode=p.value==="manual"?"manual":"auto"; this.state="idle"; this.holdEnd=0; this.log("i","Mode set to "+this.mode.toUpperCase()); return {ok:true,msg:"Mode changed"};
+      case "run": if(this.low) throw new Error("Battery is low. The pump is locked out to protect the battery.");
+        this.manualSpeed=Math.max(30,Math.min(100,+p.speed)); this.manualEnd=t+Math.max(1,Math.min(this.cfg.manualMaxMin,+p.minutes))*60; this.holdEnd=0;
+        this.log("i","Manual run "+p.minutes+" min at "+this.manualSpeed+"%"); return {ok:true,msg:"Pump started"};
+      case "stop": { const was=this.speed>0; this.manualEnd=0; if(this.mode==="auto"&&was){ this.holdEnd=t+1800; this.state="idle"; }
+        this.speed=0; this.log("i","Pump stopped by user"); return {ok:true,msg:"Pump stopped"}; }
+      case "resume": this.holdEnd=0; this.log("i","Auto resumed"); return {ok:true,msg:"Auto resumed"};
+      case "clearAlarm": this.alarm=""; this.log("i","Alarm reset by user"); return {ok:true,msg:"Alarm reset"};
+      case "time": return {ok:true,msg:"Clock set"};
+      case "tracker": this.trkManual=p.manual==="1"; if(p.angle!=null) this.trkManualAngle=+p.angle; return {ok:true,msg:"Tracker updated"};
+      case "calibrate": { const i=+p.sensor, raw=Math.round(this.cfg.dryRaw[i]-(this.m+this.off[i])/100*(this.cfg.dryRaw[i]-this.cfg.wetRaw[i]));
+        if(p.point==="dry") this.cfg.dryRaw[i]=raw; else this.cfg.wetRaw[i]=raw; this.log("i","Sensor "+(i+1)+" "+p.point+" point = "+raw);
+        return {ok:true,msg:"Calibration saved ("+raw+")"}; }
+    }
+    throw new Error("Unknown command");
+  }
+  async saveSettings(p){
+    for(const [k,v] of Object.entries(p)){ if(k in this.cfg) this.cfg[k] = (v==="1"||v==="0") && typeof this.cfg[k]==="boolean" ? v==="1" : +v; }
+    const c=this.cfg; if(c.targetPct<=c.startPct+5) c.targetPct=c.startPct+5; if(c.criticalPct>=c.startPct) c.criticalPct=c.startPct-5;
+    if(c.batResumeV<=c.batCutoffV) c.batResumeV=+(c.batCutoffV+.4).toFixed(2);
+    this.log("i","Settings saved"); return {ok:true,msg:"Settings saved"};
+  }
+  async wifi(){ return {ok:true,msg:"Demo: Wi-Fi settings are not saved"}; }
+}
+
+function batPct(v){ const V=[10.5,11.51,11.66,11.81,11.96,12.10,12.24,12.37,12.50,12.62,12.73];
+  if(v<=V[0]) return 0; if(v>=V[10]) return 100; for(let i=1;i<=10;i++) if(v<V[i]) return (i-1)*10+10*(v-V[i-1])/(V[i]-V[i-1]); return 100; }
+
+// ======================================================================
+//  App state
+// ======================================================================
+let api = Live, demo = false, S = null, H = null, failCount = 0, chartKind = "soil", manualMin = 5, settingsLoaded = false;
+const $ = s => document.querySelector(s);
+const fmt = (v,d=0) => (v==null||isNaN(v)) ? "—" : (+v).toFixed(d);
+const clamp = (v,a,b) => Math.max(a,Math.min(b,v));
+function esc(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function hhmm(epoch, tz){ if(!epoch) return "—"; const d=new Date((epoch+tz*60)*1000); return d.toISOString().substr(11,5); }
+function dur(s){ s=Math.max(0,Math.round(s)); const m=Math.floor(s/60), r=s%60; return m? m+" min "+String(r).padStart(2,"0")+" s" : r+" s"; }
+
+let toastT;
+function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),2600); }
+
+async function send(params, okMsg){
+  try{ const r = await api.cmd(params); toast(okMsg || r.msg || "Done"); await poll(); }
+  catch(e){ toast(e.message || "Could not reach the controller"); }
+}
+
+// ======================================================================
+//  Rendering
+// ======================================================================
+function arcPath(cx,cy,r,a0,a1){
+  const p=a=>[cx+r*Math.cos(a*Math.PI/180), cy+r*Math.sin(a*Math.PI/180)];
+  const [x0,y0]=p(a0),[x1,y1]=p(a1); const large=(a1-a0)>180?1:0;
+  return `M${x0.toFixed(2)} ${y0.toFixed(2)} A${r} ${r} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+}
+const ang = v => 150 + clamp(v,0,100)*2.4;
+function drawGauge(v, c, eff){
+  const cx=110, cy=110, r=88;
+  const seg=(a,b,col,w)=>`<path d="${arcPath(cx,cy,r,ang(a),ang(b))}" stroke="${col}" stroke-width="${w}" fill="none" stroke-linecap="butt"/>`;
+  let s = seg(0,100,"var(--surface-2)",18);
+  s += seg(0,c.criticalPct,"var(--bad-soft)",18);
+  s += seg(c.startPct,eff,"var(--accent-soft)",18);
+  if(v!=null && !isNaN(v)) s += `<path d="${arcPath(cx,cy,r,ang(0),ang(Math.max(.5,v)))}" stroke="var(--water)" stroke-width="8" fill="none" stroke-linecap="round"/>`;
+  const tick=(val,col,lab)=>{ const a=ang(val)*Math.PI/180, x1=cx+(r-14)*Math.cos(a), y1=cy+(r-14)*Math.sin(a), x2=cx+(r+12)*Math.cos(a), y2=cy+(r+12)*Math.sin(a);
+    const lx=cx+(r+22)*Math.cos(a), ly=cy+(r+22)*Math.sin(a);
+    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${col}" stroke-width="2"/><text x="${lx}" y="${ly+3}" text-anchor="middle" font-size="10" fill="var(--muted)" font-family="var(--font-data)">${lab}</text>`; };
+  s += tick(c.startPct,"var(--warn)",Math.round(c.startPct)) + tick(eff,"var(--accent)",Math.round(eff));
+  s += `<text x="${cx+r*Math.cos(ang(0)*Math.PI/180)}" y="${cy+r*Math.sin(ang(0)*Math.PI/180)+22}" text-anchor="middle" font-size="10" fill="var(--muted)">0</text>`;
+  s += `<text x="${cx+r*Math.cos(ang(100)*Math.PI/180)}" y="${cy+r*Math.sin(ang(100)*Math.PI/180)+22}" text-anchor="middle" font-size="10" fill="var(--muted)">100</text>`;
+  $("#gauge").innerHTML = s;
+}
+
+function soilWords(v,c,eff){
+  if(v==null||isNaN(v)) return ["No reading","var(--bad)","No soil sensor is giving a valid reading. Check the sensor cables."];
+  if(v<c.criticalPct) return ["Very dry","var(--bad)",`Below the critical ${c.criticalPct}%. The pump runs at full speed even outside watering hours.`];
+  if(v<c.startPct) return ["Dry: needs water","var(--warn)",`Below the start level of ${c.startPct}%. Watering starts in the next watering window.`];
+  if(v<eff) return ["Moist: OK","var(--accent)",`Between start (${c.startPct}%) and target (${Math.round(eff)}%). No watering needed now.`];
+  if(v<90) return ["Well watered","var(--water)",`At or above the ${Math.round(eff)}% target. The crop has enough water.`];
+  return ["Saturated","var(--water)","Soil is fully wet. Avoid watering to prevent root rot."];
+}
+
+const STATE = {
+  watering:["run","Watering · auto"], soaking:["soak","Soaking pause"], idle:["idle","Standby · auto"],
+  hold:["warn","Auto paused"], manual:["run","Manual run"], "manual-idle":["idle","Manual mode"],
+  alarm:["bad","Alarm"], lockout:["bad","Battery lockout"]
+};
+
+function render(){
+  if(!S) return;
+  const c=S.settings, eff=S.soil.effTarget ?? c.targetPct, tz=S.tzMin ?? 390;
+  // header
+  $("#clock").textContent = S.time ? hhmm(S.time,tz) : "Clock not set";
+  const conn=$("#conn"); conn.className="conn "+(demo?"demo":failCount?"lost":"live");
+  conn.lastElementChild.textContent = demo?"Demo data":failCount?"Connection lost":"Live";
+
+  // banners
+  let b="";
+  if(demo) b+=`<div class="banner demo"><div><b>Demo mode: simulated data</b>Connect your phone to the <b>SolarIrrigation</b> Wi-Fi and open <b>192.168.4.1</b> to see the real field. Here the soil dries about 20× faster so you can watch the controller work.</div></div>`;
+  if(!demo && failCount) b+=`<div class="banner warn"><div><b>Connection lost</b>The controller keeps watering on its own. Rejoin the SolarIrrigation Wi-Fi or move closer.</div></div>`;
+  if(S.alarm) b+=`<div class="banner bad"><div><b>Alarm</b>${esc(S.alarm)}</div><button class="btn sm act" data-act="clearAlarm">Reset alarm</button></div>`;
+  if(S.power.lowBattery) b+=`<div class="banner bad"><div><b>Battery low: pump locked out</b>Battery at ${fmt(S.power.batV,2)} V. The pump is allowed again above ${c.batResumeV} V.</div></div>`;
+  const bad=S.soil.sensors.map((s,i)=>s.ok?null:i+1).filter(Boolean);
+  if(bad.length) b+=`<div class="banner warn"><div><b>Sensor ${bad.join(", ")} not responding</b>Check the cable and plug. ${bad.length===S.soil.sensors.length?"Auto watering is stopped. Use Manual mode.":"The other sensors are still used."}</div></div>`;
+  if(!demo && !S.time) b+=`<div class="banner warn"><div><b>Clock not set</b>Watering hours and the solar tracker need the time.</div><button class="btn sm act" data-act="sync">Set clock now</button></div>`;
+  $("#banners").innerHTML=b;
+
+  // soil
+  const v=S.soil.avg; drawGauge(v,c,eff);
+  const [word,col,expl]=soilWords(v,c,eff);
+  $("#soilBig").innerHTML=`${fmt(v)}<small>%</small>`;
+  $("#soilState").textContent=word; $("#soilState").style.color=col; $("#soilExplain").textContent=expl;
+  $("#cropLabel").textContent=PRESETS[c.crop].name+" profile";
+  $("#sensorBars").innerHTML=S.soil.sensors.map((s,i)=>`<div class="sensor-row"><span>Sensor ${i+1}</span>
+    <div class="bar"><span style="width:${s.ok?clamp(s.pct,0,100):0}%;${s.ok?"":"background:var(--bad)"}"></span></div>
+    <span class="num" style="text-align:right;${s.ok?"":"color:var(--bad);font-weight:700"}">${s.ok?fmt(s.pct)+"%":"fault"}</span></div>`).join("");
+
+  // pump
+  const p=S.pump, running=p.speed>0||p.target>0;
+  const [cls,label]=STATE[p.state]||["idle",p.state];
+  const chip=$("#pumpChip"); chip.className="chip "+cls; chip.lastElementChild.textContent=label;
+  $("#pumpSpeed").innerHTML=`${p.speed}<small>% speed · ${fmt(c.pumpLpm*p.speed/100,1)} L/min</small>`;
+  $("#pumpBar").style.width=p.speed+"%";
+  $("#pumpReason").textContent=p.reason;
+  let timer="";
+  if(p.manualLeft) timer=`Stops in ${dur(p.manualLeft)}`;
+  else if(p.state==="watering"&&p.pulseLeft) timer=`Soak pause in ${dur(p.pulseLeft)}`;
+  else if(p.soakLeft) timer=`Watering resumes in ${dur(p.soakLeft)} if still below target`;
+  else if(p.holdLeft) timer=`Auto resumes in ${dur(p.holdLeft)} · <button class="btn sm" data-act="resume">Resume auto now</button>`;
+  $("#pumpTimer").innerHTML=timer;
+  const btn=$("#pumpBtn");
+  btn.classList.toggle("stop",running);
+  btn.disabled=!running && S.power.lowBattery;
+  $("#pumpBtnText").textContent = running ? "Stop pump" : S.power.lowBattery ? "Locked" : "Run pump";
+  $("#modeAuto").setAttribute("aria-pressed",S.mode==="auto"); $("#modeManual").setAttribute("aria-pressed",S.mode==="manual");
+  [...document.querySelectorAll("#mMinutes button")].forEach(x=>x.hidden=+x.dataset.min>c.manualMaxMin);
+  updateEstimate();
+
+  // tiles
+  const pw=S.power, a=S.air, hot=a.temp>35;
+  const dir = S.tracker.angle<60?"facing east":S.tracker.angle>120?"facing west":"facing up";
+  const tiles=[
+    ["Air temperature",fmt(a.temp,1),"°C", hot?["warn","Hot: target +5 %"]:a.temp==null?["bad","DHT22 not responding"]:["ok","Normal"],"DHT22"],
+    ["Air humidity",fmt(a.hum),"%", a.hum<35?["warn","Very dry air"]:["ok","Normal"],"Relative humidity"],
+    ["Battery",fmt(pw.batV,2),"V", pw.lowBattery?["bad","Low: pump off"]:pw.batPct<40?["warn",fmt(pw.batPct)+" % charge"]:["ok",fmt(pw.batPct)+" % charge"],
+      `<div class="bar" style="height:5px;margin-top:2px"><span style="width:${pw.batPct||0}%;background:${pw.lowBattery?"var(--bad)":pw.batPct<40?"var(--warn)":"var(--ok)"}"></span></div>`],
+    ["Solar power",fmt(pw.solarW,1),"W", pw.solarW>1?["ok","Charging"]:["", "No sun"], `${fmt(pw.solarV,1)} V · ${fmt(pw.solarA,2)} A`],
+    ["Panel angle",fmt(S.tracker.angle),"°", S.tracker.manual?["warn","Manual angle"]:["ok","Tracking"], dir],
+    ["Water today",fmt(S.today.liters,0),"L", S.today.liters>=c.dailyLimitL?["warn","Daily limit reached"]:["",""], `${fmt(S.today.pumpMin,0)} min pumping · ${fmt(S.today.solarWh,0)} Wh solar`]
+  ];
+  $("#tiles").innerHTML=tiles.map(([k,val,u,[fc,ft],sub])=>`<div class="tile"><span class="label">${k}</span>
+    <span class="v num">${val}<small>${u}</small></span>${ft?`<span class="flag ${fc}">${ft}</span>`:""}<span class="sub">${sub||""}</span></div>`).join("");
+
+  // events
+  $("#events").innerHTML=S.events.map(e=>`<li class="${e.l}"><time>${S.time?hhmm(e.t,tz):Math.round(e.t/60)+"m"}</time><span class="dot"></span><span>${esc(e.m)}</span></li>`).join("") || `<li><span></span><span></span><span class="muted">No events yet.</span></li>`;
+
+  renderControl();
+  if(!settingsLoaded){ fillSettings(c); settingsLoaded=true; }
+}
+
+function updateEstimate(){
+  const sp=+$("#mSpeed").value; $("#mSpeedOut").textContent=sp+"%";
+  const lpm=S?S.settings.pumpLpm:8; $("#mEstimate").textContent="≈ "+Math.round(lpm*sp/100*manualMin)+" L";
+}
+
+// ---------- Tracker / calibration / system ----------
+function renderControl(){
+  const t=S.tracker, ang=t.angle;
+  $("#trkMode").textContent=t.manual?"Manual angle":"Automatic (time based)";
+  $("#trkAuto").setAttribute("aria-pressed",!t.manual); $("#trkManual").setAttribute("aria-pressed",t.manual);
+  $("#trkManualBox").hidden=!t.manual;
+  // sun-path drawing: 0deg = east (left), 180 = west (right)
+  const cx=140, cy=140, r=110, rad=a=>Math.PI*(1-a/180);
+  const px=cx+r*Math.cos(rad(ang)), py=cy-r*Math.sin(rad(ang));
+  const hourLabel=[[15,"06:00"],[90,"12:00"],[165,"18:00"]].map(([a,l])=>{const x=cx+(r+14)*Math.cos(rad(a)), y=cy-(r+14)*Math.sin(rad(a));
+    return `<text x="${x}" y="${y}" text-anchor="middle" font-size="10" fill="var(--muted)" font-family="var(--font-data)">${l}</text>`;}).join("");
+  const nx=Math.cos(rad(ang)), ny=-Math.sin(rad(ang)); // normal direction
+  const tx=-ny, ty=nx; // panel direction
+  $("#trackerSvg").innerHTML=`
+    <path d="M${cx-r} ${cy} A${r} ${r} 0 0 1 ${cx+r} ${cy}" fill="none" stroke="var(--line)" stroke-width="2" stroke-dasharray="4 5"/>
+    ${hourLabel}
+    <circle cx="${px}" cy="${py}" r="11" fill="var(--sun)"/>
+    <line x1="${cx}" y1="${cy}" x2="${cx+nx*70}" y2="${cy+ny*70}" stroke="var(--sun)" stroke-width="1.5" stroke-dasharray="3 4"/>
+    <line x1="${cx-tx*38}" y1="${cy-ty*38}" x2="${cx+tx*38}" y2="${cy+ty*38}" stroke="var(--water)" stroke-width="7" stroke-linecap="round"/>
+    <rect x="${cx-4}" y="${cy}" width="8" height="24" fill="var(--muted)"/>
+    <line x1="20" y1="${cy+24}" x2="260" y2="${cy+24}" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"/>
+    <text x="20" y="${cy+18}" font-size="10" fill="var(--muted)">E</text><text x="254" y="${cy+18}" font-size="10" fill="var(--muted)">W</text>
+    <text x="${cx}" y="${cy-30}" text-anchor="middle" font-size="16" font-weight="700" fill="var(--ink)" font-family="var(--font-display)">${Math.round(ang)}°</text>`;
+
+  const c=S.settings;
+  $("#calBody").innerHTML=S.soil.sensors.map((s,i)=>`<tr>
+    <td><b>Sensor ${i+1}</b></td><td class="num">${s.raw}</td><td class="num">${s.ok?fmt(s.pct)+" %":"—"}</td>
+    <td class="num">${c.dryRaw[i]}</td><td class="num">${c.wetRaw[i]}</td>
+    <td>${s.ok?'<span class="flag ok">OK</span>':'<span class="flag bad">Fault</span>'}</td>
+    <td><div class="row" style="flex-wrap:nowrap"><button class="btn sm" data-cal="${i}" data-point="dry">Save as dry</button><button class="btn sm" data-cal="${i}" data-point="wet">Save as wet</button></div></td></tr>`).join("");
+
+  const up=S.uptime, tz=S.tzMin;
+  $("#sysInfo").innerHTML=[
+    ["Firmware",S.fw],["Uptime",Math.floor(up/86400)+" d "+Math.floor(up%86400/3600)+" h "+Math.floor(up%3600/60)+" min"],
+    ["Clock",S.time?new Date((S.time+tz*60)*1000).toISOString().replace("T"," ").substr(0,16)+" (UTC"+(tz>=0?"+":"-")+Math.floor(Math.abs(tz)/60)+":"+String(Math.abs(tz)%60).padStart(2,"0")+")":"not set"],
+    ["Hotspot",S.wifi.ap+" · 192.168.4.1"],["Router",S.wifi.sta?S.wifi.sta+" ("+S.wifi.rssi+" dBm)":"not connected"],
+    ["Mode",S.mode.toUpperCase()],["Alarm",S.alarm||"none"]
+  ].map(([k,v])=>`<dt>${k}</dt><dd>${esc(v)}</dd>`).join("");
+}
+
+// ---------- Settings form ----------
+const NUM_FIELDS=["startPct","targetPct","criticalPct","minSpeed","pumpLpm","dailyLimitL","manualMaxMin","w1Start","w1End","w2Start","w2End","batCutoffV","batResumeV","noRiseMin"];
+function fillSettings(c){
+  $("#s_crop").value=c.crop; NUM_FIELDS.forEach(k=>$("#s_"+k).value=c[k]);
+  $("#s_pulseRunMin").value=+(c.pulseRunSec/60).toFixed(1); $("#s_soakMin").value=+(c.soakSec/60).toFixed(1);
+  $("#s_hotBoost").checked=c.hotBoost; $("#s_useWindows").checked=c.useWindows; $("#s_sensorCount").value=c.sensorCount;
+  updateBand();
+}
+function updateBand(){
+  const st=+$("#s_startPct").value, tg=+$("#s_targetPct").value, cr=+$("#s_criticalPct").value;
+  $("#bandPreview").innerHTML=`<span style="left:0;width:${cr}%;background:var(--bad-soft)"></span>
+    <span style="left:${cr}%;width:${Math.max(0,st-cr)}%;background:var(--warn-soft)"></span>
+    <span style="left:${st}%;width:${Math.max(0,tg-st)}%;background:var(--accent-soft)"></span>
+    <b style="left:${tg}%"></b>`;
+  $("#cropHint").textContent=PRESETS[$("#s_crop").value].hint;
+}
+
+// ---------- Chart ----------
+const CHARTS={
+  soil:{left:{min:0,max:100,step:25,unit:"%"},series:[
+    {i:6,div:1,name:"Pump speed",color:"var(--water)",kind:"bars",unit:"%",axis:"l"},
+    {i:1,div:10,name:"Soil moisture",color:"var(--accent)",kind:"line",unit:"%",axis:"l"}],
+    bands:true},
+  air:{left:{min:10,max:45,step:5,unit:"°C"},right:{min:0,max:100,step:20,unit:"%"},series:[
+    {i:2,div:10,name:"Temperature",color:"var(--sun)",kind:"line",unit:"°C",axis:"l"},
+    {i:3,div:10,name:"Humidity",color:"var(--water)",kind:"line",unit:"%",axis:"r"}]},
+  power:{left:{min:0,max:70,step:10,unit:"W"},right:{min:10.5,max:14.5,step:1,unit:"V"},series:[
+    {i:5,div:10,name:"Solar power",color:"var(--sun)",kind:"area",unit:"W",axis:"l"},
+    {i:4,div:100,name:"Battery",color:"var(--accent)",kind:"line",unit:"V",axis:"r"}]}
+};
+function drawChart(){
+  if(!H||!S) return;
+  const svg=$("#chart"), W=Math.max(280,svg.clientWidth||600), Hh=210, def=CHARTS[chartKind];
+  const rows=H.rows.slice();
+  // append live point
+  if(S.time||!H.timeValid){ const t=S.time||H.now; if(!rows.length||t>rows[rows.length-1][0]) rows.push([t,Math.round((S.soil.avg??-.1)*10),Math.round((S.air.temp??-99.9)*10),Math.round((S.air.hum??-.1)*10),Math.round((S.power.batV??-.01)*100),Math.round((S.power.solarW??-.1)*10),S.pump.speed]); }
+  if(rows.length<2){ svg.innerHTML=""; return; }
+  const L=40, R=def.right?42:14, T=10, B=24, w=W-L-R, h=Hh-T-B;
+  const t1=rows[rows.length-1][0], t0=Math.min(rows[0][0], t1-3600);
+  const x=t=>L+(t-t0)/(t1-t0)*w;
+  const yS=(ax,v)=>T+h-(clamp(v,ax.min,ax.max)-ax.min)/(ax.max-ax.min)*h;
+  let s=`<g class="grid">`;
+  for(let v=def.left.min; v<=def.left.max+1e-9; v+=def.left.step) s+=`<line x1="${L}" x2="${L+w}" y1="${yS(def.left,v)}" y2="${yS(def.left,v)}"/>`;
+  s+=`</g><g class="axis">`;
+  for(let v=def.left.min; v<=def.left.max+1e-9; v+=def.left.step) s+=`<text x="${L-6}" y="${yS(def.left,v)+3.5}" text-anchor="end">${+v.toFixed(1)}${v===def.left.max?def.left.unit:""}</text>`;
+  if(def.right) for(let v=def.right.min; v<=def.right.max+1e-9; v+=def.right.step) s+=`<text x="${L+w+6}" y="${yS(def.right,v)+3.5}">${+v.toFixed(1)}${Math.abs(v-def.right.max)<1e-6?def.right.unit:""}</text>`;
+  // x ticks every 6 hours (local time of controller)
+  const tz=(S.tzMin??0)*60, six=21600;
+  if(S.time){ for(let t=Math.ceil((t0+tz)/six)*six-tz; t<=t1; t+=six) s+=`<text x="${x(t)}" y="${Hh-6}" text-anchor="middle">${hhmm(t,S.tzMin)}</text><line x1="${x(t)}" x2="${x(t)}" y1="${T}" y2="${T+h}" stroke="var(--line)" stroke-dasharray="2 4"/>`; }
+  else s+=`<text x="${L}" y="${Hh-6}">${Math.round((t1-t0)/3600)} h ago</text><text x="${L+w}" y="${Hh-6}" text-anchor="end">now</text>`;
+  s+=`</g>`;
+  if(def.bands){ const c=S.settings; s+=`<rect x="${L}" width="${w}" y="${yS(def.left,c.targetPct)}" height="${yS(def.left,c.startPct)-yS(def.left,c.targetPct)}" fill="var(--accent-soft)" opacity=".7"/>`; }
+  for(const se of def.series){
+    const ax=se.axis==="r"?def.right:def.left;
+    const pts=rows.map(r=>[r[0], r[se.i]<0&&se.i!==2 || r[se.i]<=-990 ? null : r[se.i]/se.div]);
+    if(se.kind==="bars"){
+      const bw=Math.max(1.5,w/(rows.length)*.9);
+      pts.forEach(([t,v])=>{ if(v>0) s+=`<rect x="${x(t)-bw/2}" y="${yS(ax,v)}" width="${bw}" height="${T+h-yS(ax,v)}" fill="${se.color}" opacity=".35"/>`; });
+      continue;
+    }
+    let d="", open=false, area="";
+    pts.forEach(([t,v])=>{ if(v==null){open=false;return;} d+=(open?"L":"M")+x(t).toFixed(1)+" "+yS(ax,v).toFixed(1); open=true; });
+    if(se.kind==="area"){ const valid=pts.filter(p=>p[1]!=null); if(valid.length) area=`<path d="${d} L${x(valid[valid.length-1][0])} ${T+h} L${x(valid[0][0])} ${T+h}Z" fill="${se.color}" opacity=".18"/>`; }
+    s+=area+`<path d="${d}" fill="none" stroke="${se.color}" stroke-width="2" stroke-linejoin="round"/>`;
+    const last=pts.filter(p=>p[1]!=null).pop();
+    if(last) s+=`<circle cx="${x(last[0])}" cy="${yS(ax,last[1])}" r="4" fill="${se.color}" stroke="var(--surface)" stroke-width="2"/>`;
+  }
+  s+=`<line id="cursor" x1="0" x2="0" y1="${T}" y2="${T+h}" stroke="var(--muted)" stroke-width="1" visibility="hidden"/>`;
+  svg.setAttribute("viewBox",`0 0 ${W} ${Hh}`); svg.innerHTML=s;
+  $("#chartLegend").innerHTML=def.series.map(se=>`<span><i style="background:${se.color}"></i>${se.name} (${se.unit})</span>`).join("")+(def.bands?`<span><i style="background:var(--accent-soft)"></i>Start–stop band</span>`:"");
+  svg._rows=rows; svg._x=x; svg._t=[t0,t1,L,w];
+}
+function chartHover(ev){
+  const svg=$("#chart"); if(!svg._rows) return;
+  const rect=svg.getBoundingClientRect(), W=+svg.getAttribute("viewBox").split(" ")[2];
+  const px=(ev.clientX-rect.left)/rect.width*W, [t0,t1,L,w]=svg._t;
+  const t=t0+(px-L)/w*(t1-t0);
+  let best=svg._rows[0]; for(const r of svg._rows) if(Math.abs(r[0]-t)<Math.abs(best[0]-t)) best=r;
+  const cur=svg.querySelector("#cursor"); cur.setAttribute("x1",svg._x(best[0])); cur.setAttribute("x2",svg._x(best[0])); cur.setAttribute("visibility","visible");
+  const def=CHARTS[chartKind];
+  $("#chartRead").textContent=(S.time?hhmm(best[0],S.tzMin):"")+"  ·  "+def.series.map(se=>`${se.name} ${best[se.i]<0&&se.i!==2?"—":(best[se.i]/se.div).toFixed(se.div>=100?2:se.div>1?1:0)} ${se.unit}`).join("  ·  ");
+}
+
+// ======================================================================
+//  Polling
+// ======================================================================
+let lastHist=0, clockSynced=false;
+async function poll(){
+  try{
+    S = await api.status(); failCount=0;
+    if(!demo && !S.time && !clockSynced){ clockSynced=true; api.cmd({do:"time",epoch:Math.floor(Date.now()/1000),tz:-new Date().getTimezoneOffset()}).catch(()=>{}); }
+    if(!H || Date.now()-lastHist>60000){ H=await api.history(); lastHist=Date.now(); }
+  }catch(e){ failCount++; }
+  render(); drawChart();
+}
+
+async function boot(){
+  if(location.protocol!=="file:"){
+    try{ S=await Live.status(); }catch(e){ S=null; }
+  }
+  if(!S){ demo=true; api=new Sim(); S=await api.status(); }
+  await poll();
+  setInterval(poll, 2000);
+}
+
+// ======================================================================
+//  Events
+// ======================================================================
+function showView(name){
+  if(!["overview","control","setup","guide"].includes(name)) name="overview";
+  document.querySelectorAll(".view").forEach(v=>v.hidden=v.id!=="view-"+name);
+  document.querySelectorAll(".tab").forEach(t=>t.setAttribute("aria-selected",t.dataset.view===name));
+  if(name==="overview") requestAnimationFrame(drawChart);
+}
+document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{ showView(t.dataset.view); try{ history.replaceState(null,"","#"+t.dataset.view); }catch(e){ location.hash=t.dataset.view; } }));
+window.addEventListener("hashchange",()=>showView(location.hash.slice(1)));
+
+$("#pumpBtn").addEventListener("click",()=>{
+  if(!S) return;
+  const running=S.pump.speed>0||S.pump.target>0;
+  if(running) send({do:"stop"},"Pump stopped");
+  else send({do:"run",speed:$("#mSpeed").value,minutes:manualMin},`Pump running for ${manualMin} min`);
+});
+$("#modeAuto").addEventListener("click",()=>send({do:"mode",value:"auto"},"Auto mode on"));
+$("#modeManual").addEventListener("click",()=>send({do:"mode",value:"manual"},"Manual mode on: the pump only runs when you press Run"));
+$("#mSpeed").addEventListener("input",updateEstimate);
+$("#mMinutes").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b) return; manualMin=+b.dataset.min;
+  document.querySelectorAll("#mMinutes button").forEach(x=>x.setAttribute("aria-pressed",x===b)); updateEstimate(); });
+document.addEventListener("click",e=>{
+  const a=e.target.closest("[data-act]"); if(a){ const act=a.dataset.act;
+    if(act==="sync") send({do:"time",epoch:Math.floor(Date.now()/1000),tz:-new Date().getTimezoneOffset()},"Clock set from this phone");
+    else send({do:act}); }
+  const cal=e.target.closest("[data-cal]"); if(cal) send({do:"calibrate",sensor:cal.dataset.cal,point:cal.dataset.point});
+});
+document.querySelectorAll("[data-chart]").forEach(b=>b.addEventListener("click",()=>{ chartKind=b.dataset.chart;
+  document.querySelectorAll("[data-chart]").forEach(x=>x.setAttribute("aria-pressed",x===b)); $("#chartRead").textContent="Touch or hover the chart to read values."; drawChart(); }));
+$("#chart").addEventListener("pointermove",chartHover);
+$("#chart").addEventListener("pointerdown",chartHover);
+window.addEventListener("resize",()=>drawChart());
+
+$("#trkAuto").addEventListener("click",()=>send({do:"tracker",manual:"0"},"Tracker back to automatic"));
+$("#trkManual").addEventListener("click",()=>send({do:"tracker",manual:"1",angle:$("#trkAngle").value},"Tracker in manual mode"));
+$("#trkAngle").addEventListener("input",e=>$("#trkAngleOut").textContent=e.target.value+"°");
+$("#trkMove").addEventListener("click",()=>send({do:"tracker",manual:"1",angle:$("#trkAngle").value},"Panel moving to "+$("#trkAngle").value+"°"));
+$("#syncClock").addEventListener("click",()=>send({do:"time",epoch:Math.floor(Date.now()/1000),tz:-new Date().getTimezoneOffset()},"Clock set from this phone"));
+$("#clearAlarm").addEventListener("click",()=>send({do:"clearAlarm"}));
+
+$("#s_crop").addEventListener("change",e=>{ const p=PRESETS[e.target.value]; if(p.startPct!=null){ $("#s_startPct").value=p.startPct; $("#s_targetPct").value=p.targetPct; $("#s_criticalPct").value=p.criticalPct; } updateBand(); });
+["s_startPct","s_targetPct","s_criticalPct"].forEach(id=>$("#"+id).addEventListener("input",()=>{ $("#s_crop").value=3; updateBand(); }));
+$("#setReload").addEventListener("click",()=>{ if(S){ fillSettings(S.settings); toast("Settings reloaded from controller"); } });
+$("#setForm").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const p={crop:$("#s_crop").value, pulseRunSec:Math.round($("#s_pulseRunMin").value*60), soakSec:Math.round($("#s_soakMin").value*60),
+    hotBoost:$("#s_hotBoost").checked?"1":"0", useWindows:$("#s_useWindows").checked?"1":"0", sensorCount:$("#s_sensorCount").value};
+  NUM_FIELDS.forEach(k=>p[k]=$("#s_"+k).value);
+  try{ const r=await api.saveSettings(p); toast(r.msg||"Settings saved"); await poll(); fillSettings(S.settings); }
+  catch(err){ toast(err.message||"Could not save settings"); }
+});
+$("#wifiForm").addEventListener("submit",async e=>{
+  e.preventDefault();
+  try{ const r=await api.wifi({ssid:$("#wSsid").value,pass:$("#wPass").value}); toast(r.msg); }catch(err){ toast(err.message); }
+});
+
+showView(location.hash.slice(1)||"overview");
+boot();
+</script>
+</body>
+</html>
