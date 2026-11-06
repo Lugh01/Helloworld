@@ -1,0 +1,8 @@
+{
+  "rules": {
+    "farm1": {
+      ".read":  "auth != null && (auth.uid === 'PASTE_CONTROLLER_UID' || auth.uid === 'PASTE_FARMER_UID')",
+      ".write": "auth != null && (auth.uid === 'PASTE_CONTROLLER_UID' || auth.uid === 'PASTE_FARMER_UID')"
+    }
+  }
+}

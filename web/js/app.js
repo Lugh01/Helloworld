@@ -3,7 +3,7 @@
 // ======================================================================
 //  App state
 // ======================================================================
-let api = Live, demo = false, S = null, H = null, failCount = 0, chartKind = "soil", manualMin = 5, settingsLoaded = false;
+let api = Live, demo = false, cloud = false, pollTimer = null, S = null, H = null, failCount = 0, chartKind = "soil", manualMin = 5, settingsLoaded = false;
 const $ = s => document.querySelector(s);
 const fmt = (v,d=0) => (v==null||isNaN(v)) ? "—" : (+v).toFixed(d);
 const clamp = (v,a,b) => Math.max(a,Math.min(b,v));
@@ -15,8 +15,9 @@ let toastT;
 function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),2600); }
 
 async function send(params, okMsg){
-  try{ const r = await api.cmd(params); toast(okMsg || r.msg || "Done"); await poll(); }
-  catch(e){ toast(e.message || "Could not reach the controller"); }
+  if(cloud) toast("Sending to the farm…");
+  try{ const r = await api.cmd(params); toast(cloud ? (r.msg || "Done") : (okMsg || r.msg || "Done")); await poll(); }
+  catch(e){ if(e.auth) return showLogin(e.message); toast(e.message || "Could not reach the controller"); }
 }
 
 // ======================================================================
@@ -64,18 +65,21 @@ function render(){
   const c=S.settings, eff=S.soil.effTarget ?? c.targetPct, tz=S.tzMin ?? 390;
   // header
   $("#clock").textContent = S.time ? hhmm(S.time,tz) : "Clock not set";
-  const conn=$("#conn"); conn.className="conn "+(demo?"demo":failCount?"lost":"live");
-  conn.lastElementChild.textContent = demo?"Demo data":failCount?"Connection lost":"Live";
+  const stale = cloud && S.ageSec > 45;
+  const conn=$("#conn"); conn.className="conn "+(demo?"demo":(failCount||stale)?"lost":"live");
+  conn.lastElementChild.textContent = demo?"Demo data":failCount?"Connection lost":cloud?(stale?"Farm offline":"Cloud · live"):"Live";
 
   // banners
   let b="";
   if(demo) b+=`<div class="banner demo"><div><b>Demo mode: simulated data</b>Connect your phone to the <b>SolarIrrigation</b> Wi-Fi and open <b>192.168.4.1</b> to see the real field. Here the soil dries about 20× faster so you can watch the controller work.</div></div>`;
-  if(!demo && failCount) b+=`<div class="banner warn"><div><b>Connection lost</b>The controller keeps watering on its own. Rejoin the SolarIrrigation Wi-Fi or move closer.</div></div>`;
+  if(!demo && failCount) b+=cloud ? `<div class="banner warn"><div><b>Can't reach the cloud</b>Check your phone's internet connection. The controller keeps watering on its own.</div></div>`
+    : `<div class="banner warn"><div><b>Connection lost</b>The controller keeps watering on its own. Rejoin the SolarIrrigation Wi-Fi or move closer.</div></div>`;
+  if(stale && !failCount) b+=`<div class="banner warn"><div><b>Farm controller offline</b>Last update ${agoText(S.ageSec)}. The readings below are from then. The controller keeps watering on its own; check its power and internet connection.</div></div>`;
   if(S.alarm) b+=`<div class="banner bad"><div><b>Alarm</b>${esc(S.alarm)}</div><button class="btn sm act" data-act="clearAlarm">Reset alarm</button></div>`;
   if(S.power.lowBattery) b+=`<div class="banner bad"><div><b>Battery low: pump locked out</b>Battery at ${fmt(S.power.batV,2)} V. The pump is allowed again above ${c.batResumeV} V.</div></div>`;
   const bad=S.soil.sensors.map((s,i)=>s.ok?null:i+1).filter(Boolean);
   if(bad.length) b+=`<div class="banner warn"><div><b>Sensor ${bad.join(", ")} not responding</b>Check the cable and plug. ${bad.length===S.soil.sensors.length?"Auto watering is stopped. Use Manual mode.":"The other sensors are still used."}</div></div>`;
-  if(!demo && !S.time) b+=`<div class="banner warn"><div><b>Clock not set</b>Watering hours and the solar tracker need the time.</div><button class="btn sm act" data-act="sync">Set clock now</button></div>`;
+  if(!demo && !cloud && !S.time) b+=`<div class="banner warn"><div><b>Clock not set</b>Watering hours and the solar tracker need the time.</div><button class="btn sm act" data-act="sync">Set clock now</button></div>`;
   $("#banners").innerHTML=b;
 
   // soil
@@ -131,6 +135,8 @@ function render(){
   if(!settingsLoaded){ fillSettings(c); settingsLoaded=true; }
 }
 
+function agoText(s){ s=Math.round(s); if(s<90) return s+" seconds ago"; if(s<5400) return Math.round(s/60)+" minutes ago"; if(s<172800) return Math.round(s/3600)+" hours ago"; return Math.round(s/86400)+" days ago"; }
+
 function updateEstimate(){
   const sp=+$("#mSpeed").value; $("#mSpeedOut").textContent=sp+"%";
   const lpm=S?S.settings.pumpLpm:8; $("#mEstimate").textContent="≈ "+Math.round(lpm*sp/100*manualMin)+" L";
@@ -167,12 +173,14 @@ function renderControl(){
     <td>${s.ok?'<span class="flag ok">OK</span>':'<span class="flag bad">Fault</span>'}</td>
     <td><div class="row" style="flex-wrap:nowrap"><button class="btn sm" data-cal="${i}" data-point="dry">Save as dry</button><button class="btn sm" data-cal="${i}" data-point="wet">Save as wet</button></div></td></tr>`).join("");
 
+  $("#signOut").hidden=!cloud; $("#syncClock").hidden=cloud;
   const up=S.uptime, tz=S.tzMin;
   $("#sysInfo").innerHTML=[
     ["Firmware",S.fw],["Uptime",Math.floor(up/86400)+" d "+Math.floor(up%86400/3600)+" h "+Math.floor(up%3600/60)+" min"],
     ["Clock",S.time?new Date((S.time+tz*60)*1000).toISOString().replace("T"," ").substr(0,16)+" (UTC"+(tz>=0?"+":"-")+Math.floor(Math.abs(tz)/60)+":"+String(Math.abs(tz)%60).padStart(2,"0")+")":"not set"],
     ["Hotspot",S.wifi.ap+" · 192.168.4.1"],["Router",S.wifi.sta?S.wifi.sta+" ("+S.wifi.rssi+" dBm)":"not connected"],
-    ["Mode",S.mode.toUpperCase()],["Alarm",S.alarm||"none"]
+    ["Mode",S.mode.toUpperCase()],["Alarm",S.alarm||"none"],
+    ["Data source",demo?"Demo simulator":cloud?"Cloud ("+(window.CLOUD_CONFIG.devicePath||"farm1")+"), updated "+agoText(S.ageSec):"Controller on this network"]
   ].map(([k,v])=>`<dt>${k}</dt><dd>${esc(v)}</dd>`).join("");
 }
 
@@ -266,20 +274,51 @@ let lastHist=0, clockSynced=false;
 async function poll(){
   try{
     S = await api.status(); failCount=0;
-    if(!demo && !S.time && !clockSynced){ clockSynced=true; api.cmd({do:"time",epoch:Math.floor(Date.now()/1000),tz:-new Date().getTimezoneOffset()}).catch(()=>{}); }
+    if(!demo && !cloud && !S.time && !clockSynced){ clockSynced=true; api.cmd({do:"time",epoch:Math.floor(Date.now()/1000),tz:-new Date().getTimezoneOffset()}).catch(()=>{}); }
     if(!H || Date.now()-lastHist>60000){ H=await api.history(); lastHist=Date.now(); }
-  }catch(e){ failCount++; }
+  }catch(e){
+    if(e.auth) return showLogin(e.message);
+    failCount++;
+    if(!S) $("#banners").innerHTML=`<div class="banner warn"><div><b>Waiting for the controller</b>${esc(e.message||"No data yet")}</div></div>`;
+  }
   render(); drawChart();
 }
 
+function startPolling(ms){ clearInterval(pollTimer); pollTimer=setInterval(poll, ms); }
+
+// Where does the data come from?
+//  1. Page opened from the ESP32 (hotspot or router)  -> Live, local API
+//  2. Hosted page with Firebase configured             -> Cloud (sign-in)
+//  3. Otherwise, or with ?demo in the address          -> Demo simulator
 async function boot(){
-  if(location.protocol!=="file:"){
+  const wantDemo=/[?&]demo\b/.test(location.search);
+  if(location.protocol!=="file:" && !wantDemo){
     try{ S=await Live.status(); }catch(e){ S=null; }
   }
-  if(!S){ demo=true; api=new Sim(); S=await api.status(); }
-  await poll();
-  setInterval(poll, 2000);
+  if(S){ await poll(); return startPolling(2000); }
+  if(Cloud.configured() && !wantDemo){
+    cloud=true; api=Cloud;
+    if(Cloud.stored()){ try{ await Cloud.ensure(); return startCloud(); }catch(e){} }
+    return showLogin();
+  }
+  startDemo();
 }
+async function startCloud(){ $("#login").hidden=true; S=null; H=null; settingsLoaded=false; await poll(); startPolling(4000); }
+async function startDemo(){ clearInterval(pollTimer); cloud=false; demo=true; api=new Sim(); $("#login").hidden=true; S=null; H=null; settingsLoaded=false; await poll(); startPolling(2000); }
+function showLogin(msg){
+  clearInterval(pollTimer);
+  $("#login").hidden=false; $("#loginErr").textContent = msg && msg!=="Please sign in" ? msg : "";
+  setTimeout(()=>{ try{ $("#lEmail").focus(); }catch(e){} }, 50);
+}
+$("#loginForm").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const b=$("#loginBtn"); b.disabled=true; b.textContent="Signing in…"; $("#loginErr").textContent="";
+  try{ await Cloud.signIn($("#lEmail").value.trim(), $("#lPass").value); $("#lPass").value=""; await startCloud(); }
+  catch(err){ $("#loginErr").textContent=err.message; }
+  finally{ b.disabled=false; b.textContent="Sign in"; }
+});
+$("#loginDemo").addEventListener("click",()=>startDemo());
+$("#signOut").addEventListener("click",()=>{ Cloud.signOut(); S=null; H=null; showLogin(); });
 
 // ======================================================================
 //  Events

@@ -148,6 +148,7 @@
         <div class="row" style="margin-top:14px">
           <button class="btn" id="syncClock">Set clock from this phone</button>
           <button class="btn danger" id="clearAlarm">Reset alarm</button>
+          <button class="btn" id="signOut" hidden>Sign out</button>
         </div>
       </div>
       <div class="card">
@@ -245,6 +246,16 @@
     </div>
 
     <div class="card prose">
+      <h2 style="margin-bottom:10px">Watching the farm from anywhere</h2>
+      <ul>
+        <li>When the controller is connected to a router with internet, it sends its readings to the cloud every 10 seconds.</li>
+        <li>Open the dashboard link on your phone from anywhere and sign in. The pill at the top shows <b>Cloud · live</b>, or <b>Farm offline</b> with the time of the last update.</li>
+        <li>Buttons work from anywhere too. The controller picks up a command within a few seconds. Commands older than 2 minutes are ignored for safety, so a pump command sent while the farm was offline can never start hours later.</li>
+        <li>If the internet goes down, watering continues normally on the controller.</li>
+      </ul>
+    </div>
+
+    <div class="card prose">
       <h2 style="margin-bottom:10px">Auto or manual?</h2>
       <ul>
         <li><b>Auto (recommended for every day).</b> The controller waters by itself. You can still press <b>Run pump</b> for an extra timed watering. If you press <b>Stop</b>, auto watering pauses for 30 minutes, or until you press <b>Resume auto</b>.</li>
@@ -307,8 +318,27 @@
   </section>
 </main>
 
+<section class="login" id="login" hidden>
+  <form class="card login-card" id="loginForm">
+    <svg width="44" height="44" viewBox="0 0 38 38" aria-hidden="true">
+      <circle cx="13" cy="13" r="6" fill="var(--sun)"/>
+      <g stroke="var(--sun)" stroke-width="2" stroke-linecap="round"><path d="M13 2v3M13 21v3M2 13h3M21 13h3M5.2 5.2l2.1 2.1M18.7 18.7l2.1 2.1M5.2 20.8l2.1-2.1M18.7 7.3l2.1-2.1"/></g>
+      <path d="M27 14c3.5 4.6 6 8.2 6 11.5a6 6 0 0 1-12 0c0-3.3 2.5-6.9 6-11.5z" fill="var(--water)"/>
+      <path d="M4 34h30" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"/>
+    </svg>
+    <div><h2 style="font-size:1.3rem">Sign in to your farm</h2>
+      <p class="muted" style="margin:4px 0 0;font-size:.88rem">See soil moisture, battery and the pump from anywhere. At the farm you can also join the <b>SolarIrrigation</b> Wi-Fi and open 192.168.4.1 without signing in.</p></div>
+    <div class="field"><label for="lEmail">Email</label><input type="email" id="lEmail" autocomplete="username" required></div>
+    <div class="field"><label for="lPass">Password</label><input type="password" id="lPass" autocomplete="current-password" required></div>
+    <p class="login-err" id="loginErr" role="alert"></p>
+    <button class="btn primary" id="loginBtn" type="submit">Sign in</button>
+    <button class="btn" id="loginDemo" type="button">View demo instead</button>
+  </form>
+</section>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<script src="js/cloud-config.js"></script>
 <script src="js/data.js"></script>
 <script src="js/app.js"></script>
 </body>

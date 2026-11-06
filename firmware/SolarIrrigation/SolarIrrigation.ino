@@ -10,6 +10,7 @@
 //  Libraries: "DHT sensor library" by Adafruit (+ Adafruit Unified Sensor).
 //  Board: ESP32 Dev Module (esp32 core 2.x or 3.x).
 //  Upload the sketch, then upload the data/ folder to LittleFS.
+//  Cloud (optional): also install "ArduinoJson" (v7) and set CLOUD_ENABLED 1.
 // ============================================================================
 #include <Arduino.h>
 #include <esp_arduino_version.h>
@@ -21,9 +22,19 @@
 #include <time.h>
 #include <sys/time.h>
 #include <DHT.h>
+#include <map>
 #include "config.h"
 
-#define FW_VERSION "1.0.0"
+#define FW_VERSION "1.1.0"
+
+// Command arguments (from a web form or a cloud command) and command result
+struct Args {
+  std::map<String, String> m;
+  bool has(const char *k) const { return m.count(String(k)) > 0; }
+  String arg(const char *k) const { auto it = m.find(String(k)); return it == m.end() ? String("") : it->second; }
+};
+struct Result { bool ok; String msg; };
+
 
 // ---------------------------------------------------------------------------
 //  Settings (editable from the dashboard, stored in NVS flash)
@@ -97,6 +108,7 @@ uint32_t dayStartMs = 0;
 struct Sample { uint32_t t; int16_t soil, temp, hum, bat, solar; uint8_t pump; } hist[HIST_N];
 int histHead = 0, histCount = 0;
 uint32_t lastHistMs = 0;
+int newSampleSlot = -1;     // set when a new history sample is recorded (for the cloud)
 float histPumpMax = 0;
 
 // Event log
@@ -381,6 +393,7 @@ void totalsLoop(float dt) {
     s.bat  = isnan(batV) ? -1 : batV * 100;
     s.solar = isnan(solarW) ? -1 : solarW * 10;
     s.pump = histPumpMax; histPumpMax = 0;
+    newSampleSlot = histHead;
     histHead = (histHead + 1) % HIST_N; if (histCount < HIST_N) histCount++;
   }
 }
@@ -413,7 +426,7 @@ const char *stateName() {
   return aState == ST_WATERING ? "watering" : aState == ST_SOAKING ? "soaking" : "idle";
 }
 
-void handleStatus() {
+String statusJson() {
   uint32_t now = millis();
   String j; j.reserve(3000);
   j = "{\"fw\":\"" FW_VERSION "\",\"uptime\":" + String(now / 1000);
@@ -446,8 +459,16 @@ void handleStatus() {
     j += "{\"t\":" + String(e.t) + ",\"l\":\"" + String(e.lvl) + "\",\"m\":" + jstr(e.msg) + "}";
   }
   j += "]}";
+  return j;
+}
+
+String sampleRow(const Sample &s) {
+  return "[" + String(s.t) + "," + String(s.soil) + "," + String(s.temp) + "," + String(s.hum) + "," + String(s.bat) + "," + String(s.solar) + "," + String(s.pump) + "]";
+}
+
+void handleStatus() {
   server.sendHeader("Cache-Control", "no-store");
-  server.send(200, "application/json", j);
+  server.send(200, "application/json", statusJson());
 }
 
 void handleHistory() {
@@ -455,71 +476,28 @@ void handleHistory() {
   j = "{\"period\":300,\"timeValid\":" + String(timeValid() ? "true" : "false") + ",\"now\":" + String(nowStamp()) + ",\"rows\":[";
   int start = (histHead - histCount + HIST_N) % HIST_N;
   for (int k = 0; k < histCount; k++) {
-    Sample &s = hist[(start + k) % HIST_N];
     if (k) j += ",";
-    j += "[" + String(s.t) + "," + String(s.soil) + "," + String(s.temp) + "," + String(s.hum) + "," + String(s.bat) + "," + String(s.solar) + "," + String(s.pump) + "]";
+    j += sampleRow(hist[(start + k) % HIST_N]);
   }
   j += "]}";
   server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/json", j);
 }
 
-void sendOk(const String &msg) { server.send(200, "application/json", "{\"ok\":true,\"msg\":" + jstr(msg) + "}"); }
-void sendErr(const String &msg) { server.send(400, "application/json", "{\"ok\":false,\"msg\":" + jstr(msg) + "}"); }
+// ---------------------------------------------------------------------------
+//  Commands – shared by the local web server and the cloud link
+// ---------------------------------------------------------------------------
 
-void handleCmd() {
-  String d = server.arg("do");
-  if (d == "mode") {
-    mode = server.arg("value") == "manual" ? MODE_MANUAL : MODE_AUTO;
-    aState = ST_IDLE; holdEndMs = 0;
-    addLog('i', String("Mode set to ") + (mode == MODE_AUTO ? "AUTO" : "MANUAL"));
-    return sendOk("Mode changed");
-  }
-  if (d == "run") {
-    if (lowBattery) return sendErr("Battery is low. The pump is locked out to protect the battery.");
-    int sp = constrain(server.arg("speed").toInt(), 30, 100);
-    int mins = constrain(server.arg("minutes").toInt(), 1, (int)cfg.manualMaxMin);
-    manualSpeed = sp; manualEndMs = millis() + mins * 60000UL; holdEndMs = 0;
-    addLog('i', "Manual run " + String(mins) + " min at " + String(sp) + "%");
-    return sendOk("Pump started");
-  }
-  if (d == "stop") {
-    bool wasRunning = pumpTarget > 0;
-    manualEndMs = 0;
-    if (mode == MODE_AUTO && wasRunning) { holdEndMs = millis() + 30UL * 60000UL; aState = ST_IDLE; }
-    addLog('i', "Pump stopped by user");
-    return sendOk("Pump stopped");
-  }
-  if (d == "resume") { holdEndMs = 0; addLog('i', "Auto resumed"); return sendOk("Auto resumed"); }
-  if (d == "clearAlarm") { alarm = ""; runSecSinceRise = 0; addLog('i', "Alarm reset by user"); return sendOk("Alarm reset"); }
-  if (d == "time") {
-    uint32_t ep = server.arg("epoch").toInt();
-    if (ep > 1700000000) { struct timeval tv = {(time_t)ep, 0}; settimeofday(&tv, nullptr); }
-    if (server.hasArg("tz")) cfg.tzMin = server.arg("tz").toInt();
-    return sendOk("Clock set");
-  }
-  if (d == "tracker") {
-    trackerManual = server.arg("manual") == "1";
-    if (server.hasArg("angle")) trackerManualAngle = constrain(server.arg("angle").toFloat(), 0, 180);
-    lastTrackMs = 0;
-    return sendOk("Tracker updated");
-  }
-  if (d == "calibrate") {
-    int i = constrain(server.arg("sensor").toInt(), 0, 2);
-    int raw = readAvg(soilPins[i], 64);
-    if (server.arg("point") == "dry") cfg.dryRaw[i] = raw; else cfg.wetRaw[i] = raw;
-    saveSettings();
-    addLog('i', "Sensor " + String(i + 1) + " " + server.arg("point") + " point = " + String(raw));
-    return sendOk("Calibration saved (" + String(raw) + ")");
-  }
-  sendErr("Unknown command");
+Args webArgs() { Args a; for (int i = 0; i < server.args(); i++) a.m[server.argName(i)] = server.arg(i); return a; }
+void sendResult(const Result &r) {
+  server.send(r.ok ? 200 : 400, "application/json", String("{\"ok\":") + (r.ok ? "true" : "false") + ",\"msg\":" + jstr(r.msg) + "}");
 }
 
-void handleSettings() {
-  auto f = [](const char *k, float &v, float lo, float hi) { if (server.hasArg(k)) v = constrain(server.arg(k).toFloat(), lo, hi); };
-  auto u8 = [](const char *k, uint8_t &v, int lo, int hi) { if (server.hasArg(k)) v = constrain(server.arg(k).toInt(), lo, hi); };
-  auto u16 = [](const char *k, uint16_t &v, int lo, int hi) { if (server.hasArg(k)) v = constrain(server.arg(k).toInt(), lo, hi); };
-  auto b = [](const char *k, bool &v) { if (server.hasArg(k)) v = server.arg(k) == "1" || server.arg(k) == "true"; };
+Result applySettings(const Args &A) {
+  auto f = [&](const char *k, float &v, float lo, float hi) { if (A.has(k)) v = constrain(A.arg(k).toFloat(), lo, hi); };
+  auto u8 = [&](const char *k, uint8_t &v, int lo, int hi) { if (A.has(k)) v = constrain(A.arg(k).toInt(), lo, hi); };
+  auto u16 = [&](const char *k, uint16_t &v, int lo, int hi) { if (A.has(k)) v = constrain(A.arg(k).toInt(), lo, hi); };
+  auto b = [&](const char *k, bool &v) { if (A.has(k)) v = A.arg(k) == "1" || A.arg(k) == "true"; };
   u8("crop", cfg.crop, 0, 3);
   f("startPct", cfg.startPct, 5, 90); f("targetPct", cfg.targetPct, 10, 95); f("criticalPct", cfg.criticalPct, 0, 80);
   u8("minSpeed", cfg.minSpeed, 20, 100);
@@ -536,17 +514,71 @@ void handleSettings() {
   if (cfg.batResumeV <= cfg.batCutoffV) cfg.batResumeV = cfg.batCutoffV + 0.4f;
   saveSettings();
   addLog('i', "Settings saved");
-  sendOk("Settings saved");
+  return {true, "Settings saved"};
 }
+
+Result runCommand(const Args &A) {
+  String d = A.arg("do");
+  if (d == "settings") return applySettings(A);
+  if (d == "mode") {
+    mode = A.arg("value") == "manual" ? MODE_MANUAL : MODE_AUTO;
+    aState = ST_IDLE; holdEndMs = 0;
+    addLog('i', String("Mode set to ") + (mode == MODE_AUTO ? "AUTO" : "MANUAL"));
+    return {true, "Mode changed"};
+  }
+  if (d == "run") {
+    if (lowBattery) return {false, "Battery is low. The pump is locked out to protect the battery."};
+    int sp = constrain(A.arg("speed").toInt(), 30, 100);
+    int mins = constrain(A.arg("minutes").toInt(), 1, (int)cfg.manualMaxMin);
+    manualSpeed = sp; manualEndMs = millis() + mins * 60000UL; holdEndMs = 0;
+    addLog('i', "Manual run " + String(mins) + " min at " + String(sp) + "%");
+    return {true, "Pump started"};
+  }
+  if (d == "stop") {
+    bool wasRunning = pumpTarget > 0;
+    manualEndMs = 0;
+    if (mode == MODE_AUTO && wasRunning) { holdEndMs = millis() + 30UL * 60000UL; aState = ST_IDLE; }
+    addLog('i', "Pump stopped by user");
+    return {true, "Pump stopped"};
+  }
+  if (d == "resume") { holdEndMs = 0; addLog('i', "Auto resumed"); return {true, "Auto resumed"}; }
+  if (d == "clearAlarm") { alarm = ""; runSecSinceRise = 0; addLog('i', "Alarm reset by user"); return {true, "Alarm reset"}; }
+  if (d == "time") {
+    uint32_t ep = A.arg("epoch").toInt();
+    if (ep > 1700000000) { struct timeval tv = {(time_t)ep, 0}; settimeofday(&tv, nullptr); }
+    if (A.has("tz")) cfg.tzMin = A.arg("tz").toInt();
+    return {true, "Clock set"};
+  }
+  if (d == "tracker") {
+    trackerManual = A.arg("manual") == "1";
+    if (A.has("angle")) trackerManualAngle = constrain(A.arg("angle").toFloat(), 0, 180);
+    lastTrackMs = 0;
+    return {true, "Tracker updated"};
+  }
+  if (d == "calibrate") {
+    int i = constrain(A.arg("sensor").toInt(), 0, 2);
+    int raw = readAvg(soilPins[i], 64);
+    if (A.arg("point") == "dry") cfg.dryRaw[i] = raw; else cfg.wetRaw[i] = raw;
+    saveSettings();
+    addLog('i', "Sensor " + String(i + 1) + " " + A.arg("point") + " point = " + String(raw));
+    return {true, "Calibration saved (" + String(raw) + ")"};
+  }
+  return {false, "Unknown command"};
+}
+
+void handleCmd() { sendResult(runCommand(webArgs())); }
+void handleSettings() { sendResult(applySettings(webArgs())); }
 
 void handleWifi() {
   prefs.begin("wifi", false);
   prefs.putString("ssid", server.arg("ssid"));
   prefs.putString("pass", server.arg("pass"));
   prefs.end();
-  sendOk("Saved. The controller restarts and joins the network.");
+  sendResult({true, "Saved. The controller restarts and joins the network."});
   delay(500); ESP.restart();
 }
+
+#include "cloud.h"   // optional Firebase link (CLOUD_ENABLED in config.h)
 
 // ---------------------------------------------------------------------------
 //  Setup / loop
@@ -591,6 +623,8 @@ void setup() {
   server.on("/api/cmd", HTTP_POST, handleCmd);
   server.on("/api/settings", HTTP_POST, handleSettings);
   server.on("/api/wifi", HTTP_POST, handleWifi);
+  server.serveStatic("/css", LittleFS, "/css", "no-cache");
+  server.serveStatic("/js", LittleFS, "/js", "no-cache");
   server.on("/", HTTP_GET, []() {
     File f = LittleFS.open("/index.html", "r");
     if (!f) { server.send(404, "text/html", "<h2>Dashboard file not found</h2><p>Upload the <b>data</b> folder to LittleFS (see README). "
@@ -605,6 +639,7 @@ void setup() {
   });
   server.begin();
   MDNS.addService("http", "tcp", 80);
+  cloudBegin();
 }
 
 uint32_t lastCtrlMs = 0, lastSensMs = 0;
@@ -623,4 +658,5 @@ void loop() {
     lastCtrlMs = now;
     controlLoop(dt);
   }
+  cloudLoop();
 }

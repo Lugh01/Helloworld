@@ -62,3 +62,17 @@
 #define SUNRISE_HOUR     6.0f
 #define SUNSET_HOUR      18.0f
 #define TRACK_STEP_MIN   15       // move the panel every 15 minutes
+
+// ---------------- Cloud (optional, free Firebase) ----------------
+// Lets you watch and control the farm from anywhere via the hosted dashboard.
+// Needs the ESP32 to join a router with internet (STA_SSID above, or the
+// dashboard's Wi-Fi form). Requires the "ArduinoJson" library (v7).
+// See the "Cloud setup" section in README.md.
+#define CLOUD_ENABLED    0                     // 1 = send data to Firebase
+#define FB_API_KEY       ""                    // Project settings -> Web API key
+#define FB_DATABASE_URL  ""                    // e.g. https://my-farm-default-rtdb.asia-southeast1.firebasedatabase.app
+#define FB_EMAIL         ""                    // the controller's Firebase user
+#define FB_PASSWORD      ""
+#define FB_DEVICE_PATH   "farm1"               // must match devicePath in web/js/cloud-config.js
+#define CLOUD_STATUS_MS  10000                 // upload live status every 10 s
+#define CLOUD_CMD_MS     3000                  // check for commands every 3 s

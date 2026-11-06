@@ -181,3 +181,90 @@ class Sim {
 function batPct(v){ const V=[10.5,11.51,11.66,11.81,11.96,12.10,12.24,12.37,12.50,12.62,12.73];
   if(v<=V[0]) return 0; if(v>=V[10]) return 100; for(let i=1;i<=10;i++) if(v<V[i]) return (i-1)*10+10*(v-V[i-1])/(V[i]-V[i-1]); return 100; }
 
+
+// ======================================================================
+//  Cloud source: Firebase Realtime Database via its REST API
+//  (no SDK needed). The ESP32 uploads /status and /history and reads
+//  /commands. Sign-in uses Firebase email/password accounts.
+// ======================================================================
+class AuthError extends Error { constructor(msg){ super(msg || "Please sign in"); this.auth = true; } }
+
+const Cloud = {
+  get cfg(){ return window.CLOUD_CONFIG || {}; },
+  configured(){ return !!(this.cfg.apiKey && this.cfg.databaseURL); },
+  token: null, refresh: null, exp: 0,
+  stored(){ try{ return localStorage.getItem("irr_refresh"); }catch(e){ return null; } },
+  setToken(id, refresh, expiresIn){
+    this.token = id; this.refresh = refresh; this.exp = Date.now() + (Number(expiresIn) - 60) * 1000;
+    try{ localStorage.setItem("irr_refresh", refresh); }catch(e){}
+  },
+  async signIn(email, password){
+    const r = await fetch("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + this.cfg.apiKey, {
+      method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({email, password, returnSecureToken:true})});
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok){
+      const code = (j.error && j.error.message) || "";
+      throw new Error(/INVALID|PASSWORD|EMAIL_NOT_FOUND/.test(code) ? "Wrong email or password." :
+                      /TOO_MANY/.test(code) ? "Too many attempts. Wait a few minutes and try again." :
+                      "Sign-in failed (" + (code || r.status) + ").");
+    }
+    this.setToken(j.idToken, j.refreshToken, j.expiresIn);
+  },
+  async ensure(){
+    if(this.token && Date.now() < this.exp) return;
+    const rt = this.refresh || this.stored();
+    if(!rt) throw new AuthError();
+    const r = await fetch("https://securetoken.googleapis.com/v1/token?key=" + this.cfg.apiKey, {
+      method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"},
+      body:new URLSearchParams({grant_type:"refresh_token", refresh_token:rt})});
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok){ this.signOut(); throw new AuthError("Your session expired. Please sign in again."); }
+    this.setToken(j.id_token, j.refresh_token, j.expires_in);
+  },
+  signOut(){ this.token = null; this.refresh = null; try{ localStorage.removeItem("irr_refresh"); }catch(e){} },
+  url(path){ return this.cfg.databaseURL.replace(/\/$/,"") + "/" + (this.cfg.devicePath || "farm1") + path + ".json?auth=" + encodeURIComponent(this.token); },
+  async db(method, path, body){
+    await this.ensure();
+    const r = await fetch(this.url(path), {method, cache:"no-store",
+      headers: body ? {"Content-Type":"application/json"} : undefined, body: body ? JSON.stringify(body) : undefined});
+    if(r.status === 401){ this.token = null; throw new AuthError("This account is not allowed to see the farm data."); }
+    if(!r.ok) throw new Error("Cloud error " + r.status);
+    return r.json();
+  },
+  async status(){
+    const s = await this.db("GET", "/status");
+    if(!s) throw new Error("No data yet. Is the controller online with cloud enabled?");
+    // Firebase drops empty values and turns arrays into objects: restore the shape the UI expects
+    const arr = v => Array.isArray(v) ? v.filter(Boolean) : Object.values(v || {});
+    s.events = arr(s.events); s.alarm = s.alarm || "";
+    s.soil = s.soil || {}; s.soil.sensors = arr(s.soil.sensors).map(x => ({raw:0, ok:false, ...x}));
+    s.wifi = Object.assign({ap:"SolarIrrigation", sta:"", rssi:0}, s.wifi);
+    s.air = s.air || {}; s.power = Object.assign({lowBattery:false}, s.power); s.today = s.today || {};
+    s.pump = Object.assign({speed:0,target:0,reason:"",manualLeft:0,holdLeft:0,pulseLeft:0,soakLeft:0}, s.pump);
+    s.tracker = Object.assign({angle:90, manual:false}, s.tracker);
+    if(s.settings){ s.settings.dryRaw = arr(s.settings.dryRaw); s.settings.wetRaw = arr(s.settings.wetRaw); }
+    // How old is this snapshot? (seen = Firebase server time of the last upload)
+    s.ageSec = s.seen ? Math.max(0, (Date.now() - s.seen) / 1000) : 1e9;
+    return s;
+  },
+  async history(){
+    const h = await this.db("GET", "/history");
+    const rows = (Array.isArray(h) ? h : Object.values(h || {})).filter(r => Array.isArray(r) && r[0] > 1.7e9).sort((a,b) => a[0]-b[0]);
+    // keep only the last 24 h
+    const end = rows.length ? rows[rows.length-1][0] : 0;
+    return {period:300, timeValid:true, now:end, rows:rows.filter(r => r[0] > end - 86400)};
+  },
+  async send(params){
+    const r = await this.db("POST", "/commands", {...params, ts:{".sv":"timestamp"}});
+    const key = r && r.name;
+    for(let i = 0; i < 15; i++){       // wait up to ~15 s for the controller to answer
+      await new Promise(res => setTimeout(res, 1000));
+      const lr = await this.db("GET", "/lastResult").catch(() => null);
+      if(lr && lr.key === key){ if(!lr.ok) throw new Error(lr.msg); return {ok:true, msg:lr.msg}; }
+    }
+    return {ok:true, msg:"Sent. The controller will apply it when it is online."};
+  },
+  cmd(p){ return this.send(p); },
+  saveSettings(p){ return this.send({do:"settings", ...p}); },
+  async wifi(){ throw new Error("Wi-Fi can only be changed on the farm hotspot (192.168.4.1)."); }
+};

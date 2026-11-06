@@ -5,13 +5,28 @@ IoT dashboard and ESP32 firmware for the project **"Development of an Automated 
 The ESP32 measures soil moisture, air temperature/humidity, battery and solar panel, waters the crop automatically with a speed-controlled DC pump, turns the solar panel to follow the sun, and serves a mobile-friendly web dashboard over its own Wi-Fi hotspot. **No internet is needed in the field.**
 
 ```
+web/                      ← the dashboard website (edit here)
+├── index.html, css/, js/
+├── js/cloud-config.js    ← Firebase settings for viewing from anywhere
+└── mock-server.js        ← fake ESP32 for testing on a computer
 firmware/SolarIrrigation/
 ├── SolarIrrigation.ino   ← controller logic, sensors, pump, tracker, web API
-├── config.h              ← pins, Wi-Fi name/password, divider ratios (edit this)
-└── data/index.html       ← the dashboard (served by the ESP32 from LittleFS)
+├── config.h              ← pins, Wi-Fi, divider ratios, cloud keys (edit this)
+├── cloud.h               ← optional Firebase link
+└── data/                 ← copy of web/ that is uploaded to the ESP32 (LittleFS)
+firebase/database.rules.json  ← security rules for the cloud database
+.github/workflows/pages.yml   ← publishes web/ to GitHub Pages (free hosting)
 ```
 
-Open `firmware/SolarIrrigation/data/index.html` straight in a browser to see the dashboard in **demo mode** with simulated data. This needs no hardware.
+Open `web/index.html` straight in a browser to see the dashboard in **demo mode** with simulated data. This needs no hardware.
+
+There are three ways to open the dashboard:
+
+| Where you are | How | Data |
+|---|---|---|
+| At the farm | Join the Wi-Fi `SolarIrrigation`, open `http://192.168.4.1` | Live from the ESP32, no internet needed |
+| Anywhere (phone with internet) | Open the GitHub Pages link and sign in | Through the free Firebase cloud ([section 7](#7-cloud-view-the-farm-from-anywhere-free)) |
+| No hardware yet | Open the link with `?demo` at the end, or open the file | Simulated |
 
 ---
 
@@ -87,10 +102,10 @@ Calibrate the voltage dividers: measure the battery with a multimeter and adjust
 ## 4. Install
 
 1. Install **Arduino IDE 2** and the **esp32 by Espressif** board package (2.x or 3.x).
-2. Library Manager: install **DHT sensor library** (Adafruit) and **Adafruit Unified Sensor**.
+2. Library Manager: install **DHT sensor library** (Adafruit) and **Adafruit Unified Sensor**. For the cloud, also install **ArduinoJson** (v7).
 3. Open `firmware/SolarIrrigation/SolarIrrigation.ino`. Edit `config.h` (change `AP_PASSWORD`!).
 4. Board: **ESP32 Dev Module**. Partition scheme: **Default 4MB with spiffs**. Upload.
-5. Upload the dashboard into LittleFS: install the [arduino-littlefs-upload](https://github.com/earlephilhower/arduino-littlefs-upload) plugin. Then press `Ctrl+Shift+P` → **Upload LittleFS to Pico/ESP8266/ESP32** (close the Serial Monitor first).
+5. If you changed anything in `web/`, copy `web/index.html`, `web/css` and `web/js` into `firmware/SolarIrrigation/data/` first. Then upload the dashboard into LittleFS: install the [arduino-littlefs-upload](https://github.com/earlephilhower/arduino-littlefs-upload) plugin. Then press `Ctrl+Shift+P` → **Upload LittleFS to Pico/ESP8266/ESP32** (close the Serial Monitor first).
    *(PlatformIO: put `data/` next to `platformio.ini`, set `board_build.filesystem = littlefs`, run `pio run -t uploadfs`.)*
 6. On your phone, join Wi-Fi **SolarIrrigation** and open **http://192.168.4.1** (or `http://irrigation.local`).
 
@@ -127,3 +142,59 @@ Example: `curl -X POST -d "do=run&speed=70&minutes=5" http://192.168.4.1/api/cmd
 ## 6. Data for your report (Phase 4–5 testing)
 
 The dashboard records everything needed for the performance evaluation: soil moisture response to watering, pump run time, **litres used per day** (from measured flow × speed × time), **solar energy harvested (Wh/day)**, battery voltage over the day and night, and panel angle against solar power, which shows the tracking gain. To compare tracking with a fixed panel, set the tracker to *Manual angle* at 90° for a day and compare the daily Wh.
+
+---
+
+## 7. Cloud: view the farm from anywhere (free)
+
+**How it works:** the ESP32 uploads its status every 10 s and a history point every 5 min to a **Firebase Realtime Database**. It checks for commands every 3 s. The dashboard is hosted on **GitHub Pages**. You open the link on your phone, sign in, and see the same screens as at the farm, including the **Run pump** button.
+
+```
+ ESP32 ──HTTPS──► Firebase Realtime Database ◄──HTTPS── phone browser
+ (farm router / 4G)    status, history, commands      (GitHub Pages dashboard)
+```
+
+Both services are free: Firebase's *Spark* plan (no credit card) gives 1 GB of storage and 10 GB of downloads a month, far more than this project uses. GitHub Pages is free for public repositories.
+
+**Safety built in**
+- Watering decisions stay on the ESP32. If the internet goes down, the farm keeps working.
+- Commands older than 2 minutes are ignored, so a "Run pump" sent while the farm was offline never starts hours later.
+- Manual runs are always timed, and the battery cut-off cannot be overridden from the cloud.
+- Only the two accounts you list in the database rules can read or control the farm.
+- The dashboard shows **Farm offline** and the time of the last update when the controller stops reporting.
+
+### Step 1: create the Firebase project (about 10 minutes)
+1. Go to <https://console.firebase.google.com> → **Add project** (Google Analytics not needed).
+2. **Build → Realtime Database → Create database.** Pick the location closest to Myanmar (*Singapore, asia-southeast1*) and choose *Start in locked mode*. Copy the database URL shown at the top, e.g. `https://my-farm-default-rtdb.asia-southeast1.firebasedatabase.app`.
+3. **Build → Authentication → Get started → Email/Password → Enable.**
+4. **Authentication → Users → Add user**, twice:
+   - one for the controller, e.g. `controller@myfarm.local` with a long random password
+   - one for you, e.g. your own email
+   Copy each user's **User UID**.
+5. **Realtime Database → Rules:** paste `firebase/database.rules.json`, replace the two `PASTE_…_UID` values with the UIDs from step 4, and click **Publish**.
+6. **Project settings (gear icon) → General:** copy the **Web API key**.
+7. Recommended: **Authentication → Settings → User actions:** untick *Enable create (sign-up)* so nobody else can make accounts.
+
+### Step 2: configure the ESP32
+In `firmware/SolarIrrigation/config.h`:
+```cpp
+#define STA_SSID         "YourRouter"      // the farm needs internet: router, 4G pocket router or phone hotspot
+#define STA_PASSWORD     "router-password"
+#define CLOUD_ENABLED    1
+#define FB_API_KEY       "AIzaSy..."
+#define FB_DATABASE_URL  "https://my-farm-default-rtdb.asia-southeast1.firebasedatabase.app"
+#define FB_EMAIL         "controller@myfarm.local"
+#define FB_PASSWORD      "the-controller-password"
+```
+Install **ArduinoJson** and upload again. The Serial Monitor (115200 baud) shows `[cloud] signed in` and then `[cloud] online`.
+
+### Step 3: configure and publish the website
+1. In `web/js/cloud-config.js`, fill in `apiKey` and `databaseURL` (the same values as above). The API key is safe to publish: access is protected by the sign-in and the database rules.
+2. On GitHub: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+3. Merge this branch into `main` (or run the *Deploy dashboard to GitHub Pages* workflow from the **Actions** tab). The site appears at
+   **https://lugh01.github.io/Helloworld/**
+4. On your phone, open the link, sign in with *your* account, then use **Share → Add to Home Screen**.
+
+Demo without signing in: `https://lugh01.github.io/Helloworld/?demo`
+
+*Alternative hosting:* drag the `web` folder onto <https://app.netlify.com/drop> (free) and you get a link immediately.
